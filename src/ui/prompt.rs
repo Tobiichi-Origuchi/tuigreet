@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use rand::{Rng, SeedableRng, prelude::StdRng};
+use rand::{RngExt, SeedableRng, prelude::StdRng};
 use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
   text::Span,
@@ -130,7 +130,7 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
                 greeter
                   .buffer
                   .chars()
-                  .map(|_| pool.chars().nth(rng.gen_range(0..pool.chars().count())).unwrap())
+                  .map(|_| pool.chars().nth(rng.random_range(0..pool.chars().count())).unwrap())
                   .collect()
               }
             },

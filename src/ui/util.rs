@@ -109,7 +109,7 @@ pub fn get_greeting_height(greeter: &Greeter, padding: u16, fallback: u16) -> (O
   if let Some(greeting) = &greeter.greeting {
     let width = greeter.width();
 
-    let text = match greeting.clone().trim().into_text() {
+    let text = match greeting.clone().into_text() {
       Ok(text) => text,
       Err(_) => Text::raw(greeting),
     };
@@ -313,6 +313,20 @@ mod test {
       Span::styled(" World", Style::reset()),
     ])]))
     .wrap(Wrap { trim: false });
+
+    assert_eq!(text, Some(expected));
+    assert_eq!(height, 3);
+  }
+
+  #[test]
+  fn greeting_preserves_whitespace() {
+    let mut greeter = Greeter::default();
+    greeter.config = Greeter::options().parse(&["--width", "30", "--container-padding", "1"]).ok();
+    greeter.greeting = Some("  Hello     \nWorld    ".into());
+
+    let (text, height) = get_greeting_height(&greeter, 1, 0);
+
+    let expected = Paragraph::new(Text::from(vec![Line::from("  Hello     "), Line::from("World    ")])).wrap(Wrap { trim: false });
 
     assert_eq!(text, Some(expected));
     assert_eq!(height, 3);

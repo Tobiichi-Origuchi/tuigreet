@@ -5,11 +5,11 @@ use std::{
   io::{self, BufRead, BufReader},
   path::{Path, PathBuf},
   process::Command,
+  sync::LazyLock,
 };
 
 use chrono::Local;
 use ini::Ini;
-use lazy_static::lazy_static;
 use nix::sys::utsname;
 use utmp_rs::{UtmpEntry, UtmpParser};
 use uzers::os::unix::UserExt;
@@ -31,17 +31,17 @@ const LAST_SESSION: &str = "/var/cache/tuigreet/lastsession-path";
 const DEFAULT_MIN_UID: u32 = 1000;
 const DEFAULT_MAX_UID: u32 = 60000;
 
-lazy_static! {
-  static ref XDG_DATA_DIRS: Vec<PathBuf> = {
-    let value = env::var("XDG_DATA_DIRS").unwrap_or("/usr/local/share:/usr/share".to_string());
-    env::split_paths(&value).filter(|p| p.is_absolute()).collect()
-  };
-  static ref DEFAULT_SESSION_PATHS: Vec<(PathBuf, SessionType)> = XDG_DATA_DIRS
+static XDG_DATA_DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
+  let value = env::var("XDG_DATA_DIRS").unwrap_or("/usr/local/share:/usr/share".to_string());
+  env::split_paths(&value).filter(|p| p.is_absolute()).collect()
+});
+static DEFAULT_SESSION_PATHS: LazyLock<Vec<(PathBuf, SessionType)>> = LazyLock::new(|| {
+  XDG_DATA_DIRS
     .iter()
     .map(|p| (p.join("wayland-sessions"), SessionType::Wayland))
     .chain(XDG_DATA_DIRS.iter().map(|p| (p.join("xsessions"), SessionType::X11)))
-    .collect();
-}
+    .collect()
+});
 
 pub fn get_hostname() -> String {
   match utsname::uname() {

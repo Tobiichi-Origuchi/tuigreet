@@ -3,7 +3,7 @@ use std::time::Duration;
 #[cfg(not(test))]
 use crossterm::event::EventStream;
 use crossterm::event::{Event as TermEvent, KeyEvent};
-use futures::{StreamExt, future::FutureExt};
+use futures_util::{StreamExt, future::FutureExt};
 use tokio::{
   process::Command,
   sync::mpsc::{self, Sender},
@@ -39,7 +39,7 @@ impl Events {
         // In tests, we are not capturing events from the terminal, so we need
         // to replace the crossterm::EventStream with a dummy pending stream.
         #[cfg(test)]
-        let mut stream = futures::stream::pending::<Result<TermEvent, ()>>();
+        let mut stream = futures_util::stream::pending::<Result<TermEvent, ()>>();
 
         let mut render_interval = tokio::time::interval(Duration::from_secs_f64(1.0 / FRAME_RATE));
 

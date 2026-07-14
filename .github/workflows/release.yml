@@ -14,10 +14,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  TARGET: x86_64-unknown-linux-gnu
 
 jobs:
-  build:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.0
@@ -25,10 +24,7 @@ jobs:
         with:
           toolchain: nightly-2026-07-10
           components: clippy, rustfmt
-          targets: ${{ env.TARGET }}
       - uses: Swatinem/rust-cache@v2.9.1
-        with:
-          shared-key: release-${{ env.TARGET }}
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install --yes libnss-wrapper scdoc
       - name: Check formatting
@@ -41,26 +37,67 @@ jobs:
           NSS_WRAPPER_GROUP: contrib/fixtures/group
           LD_PRELOAD: libnss_wrapper.so
         run: cargo test --locked --all-features
-      - name: Build
-        run: cargo build --locked --release --target "$TARGET"
       - name: Check release version
         if: github.ref_type == 'tag'
         run: |
           version=$(cargo metadata --locked --no-deps --format-version 1 | jq --raw-output '.packages[0].version')
           test "$version" = "$GITHUB_REF_NAME"
+      - name: Build man page
+        run: scdoc < contrib/man/tuigreet-1.scd > tuigreet.1
+      - name: Upload man page
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: release-metadata
+          path: tuigreet.1
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86_64
+            target: x86_64-unknown-linux-gnu
+          - name: aarch64
+            target: aarch64-unknown-linux-gnu
+          - name: i686
+            target: i686-unknown-linux-gnu
+          - name: armv7
+            target: armv7-unknown-linux-gnueabihf
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-10
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          shared-key: release-${{ matrix.target }}
+      - name: Install cross
+        uses: taiki-e/install-action@v2.83.2
+        with:
+          tool: cross@0.2.5
+      - name: Download man page
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: release-metadata
+          path: dist/metadata
+      - name: Build
+        run: cross build --locked --release --target "${{ matrix.target }}"
       - name: Package
         env:
           VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'tip' }}
         run: |
-          package="tuigreet-${VERSION}-x86_64"
-          install -Dm755 "target/${TARGET}/release/tuigreet" "dist/${package}/bin/tuigreet"
+          package="tuigreet-${VERSION}-${{ matrix.name }}"
+          install -Dm755 "target/${{ matrix.target }}/release/tuigreet" "dist/${package}/bin/tuigreet"
           install -Dm644 contrib/tuigreet.toml "dist/${package}/share/tuigreet/config.toml"
           install -Dm644 contrib/text.conf "dist/${package}/share/tuigreet/text.conf"
           install -Dm644 LICENSE "dist/${package}/share/licenses/tuigreet/LICENSE"
           install -Dm644 README.md "dist/${package}/share/doc/tuigreet/README.md"
-          scdoc < contrib/man/tuigreet-1.scd > "dist/${package}/tuigreet.1"
-          install -Dm644 "dist/${package}/tuigreet.1" "dist/${package}/share/man/man1/tuigreet.1"
-          rm "dist/${package}/tuigreet.1"
+          install -Dm644 dist/metadata/tuigreet.1 "dist/${package}/share/man/man1/tuigreet.1"
           source_date_epoch=$(git show --no-patch --format=%ct HEAD)
           tar --create --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${source_date_epoch}" --directory dist "$package" | gzip --no-name > "dist/${package}.tar.gz"
           cd dist
@@ -68,7 +105,7 @@ jobs:
       - name: Upload package
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: release-${{ env.TARGET }}
+          name: package-${{ matrix.name }}
           path: |
             dist/*.tar.gz
             dist/*.sha256
@@ -84,7 +121,7 @@ jobs:
       - name: Download package
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: release-*
+          pattern: package-*
           path: dist
           merge-multiple: true
       - name: Publish versioned release

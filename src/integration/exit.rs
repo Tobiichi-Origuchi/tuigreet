@@ -17,10 +17,10 @@ async fn exit() {
     let mut runner = runner.clone();
 
     async move {
+      runner.wait_for_render().await;
       runner
         .send_modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL)
         .await;
-      runner.wait_for_render().await;
     }
   });
 

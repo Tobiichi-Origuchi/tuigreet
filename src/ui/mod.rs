@@ -16,15 +16,15 @@ use std::{
 };
 
 use chrono::prelude::*;
-use sessions::SessionSource;
-use tokio::sync::RwLock;
-use tui::{
+use ratatui::{
   Frame as CrosstermFrame, Terminal,
   layout::{Alignment, Constraint, Direction, Layout},
   style::Modifier,
   text::{Line, Span},
   widgets::Paragraph,
 };
+use sessions::SessionSource;
+use tokio::sync::RwLock;
 use util::buttonize;
 
 use crate::{Greeter, Mode, info::capslock_status, ui::util::should_hide_cursor};
@@ -48,7 +48,8 @@ enum Button {
 
 pub async fn draw<B>(greeter: Arc<RwLock<Greeter>>, terminal: &mut Terminal<B>) -> Result<(), Box<dyn Error>>
 where
-  B: tui::backend::Backend,
+  B: ratatui::backend::Backend,
+  B::Error: 'static,
 {
   let mut greeter = greeter.write().await;
   let hide_cursor = should_hide_cursor(&greeter);
@@ -56,7 +57,7 @@ where
   terminal.draw(|f| {
     let theme = &greeter.theme;
 
-    let size = f.size();
+    let size = f.area();
     let chunks = Layout::default()
       .constraints(
         [
@@ -137,7 +138,7 @@ where
     };
 
     if !hide_cursor && let Some(cursor) = cursor {
-      f.set_cursor(cursor.0 - 1, cursor.1 - 1);
+      f.set_cursor_position((cursor.0 - 1, cursor.1 - 1));
     }
   })?;
 

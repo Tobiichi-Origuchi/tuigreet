@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use tui::{
+use ratatui::{
   layout::{Constraint, Direction, Layout, Rect},
   text::Span,
   widgets::{Block, BorderType, Borders, Paragraph},
@@ -16,7 +16,7 @@ use super::common::style::Themed;
 pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn Error>> {
   let theme = &greeter.theme;
 
-  let size = f.size();
+  let size = f.area();
   let (x, y, width, height) = get_rect_bounds(greeter, size, 0);
 
   let container_padding = greeter.container_padding();

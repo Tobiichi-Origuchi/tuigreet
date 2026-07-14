@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use rand::{Rng, SeedableRng, prelude::StdRng};
-use tui::{
+use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
   text::Span,
   widgets::{Block, BorderType, Borders, Paragraph},
@@ -22,7 +22,7 @@ const ANSWER_INDEX: usize = 3;
 pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn Error>> {
   let theme = &greeter.theme;
 
-  let size = f.size();
+  let size = f.area();
   let (x, y, width, height) = get_rect_bounds(greeter, size, 0);
 
   let container_padding = greeter.container_padding();

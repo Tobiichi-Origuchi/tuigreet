@@ -24,12 +24,12 @@ use crossterm::{
 use event::Event;
 use greetd_ipc::Request;
 use power::PowerPostAction;
+use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::sync::RwLock;
 use tracing_appender::non_blocking::WorkerGuard;
-use tui::{Terminal, backend::CrosstermBackend};
 
 #[cfg(not(test))]
-use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
+use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, enable_raw_mode};
 
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
@@ -51,7 +51,8 @@ async fn main() {
 
 async fn run<B>(backend: B, mut greeter: Greeter, mut events: Events) -> Result<(), Box<dyn Error>>
 where
-  B: tui::backend::Backend,
+  B: ratatui::backend::Backend,
+  B::Error: 'static,
 {
   tracing::info!("tuigreet started");
 
@@ -60,13 +61,10 @@ where
   #[cfg(not(test))]
   {
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen)?;
+    execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All))?;
   }
 
   let mut terminal = Terminal::new(backend)?;
-
-  #[cfg(not(test))]
-  terminal.clear()?;
 
   let ipc = Ipc::new();
 
@@ -113,7 +111,7 @@ where
       Some(Event::PowerCommand(command)) => {
         if let PowerPostAction::ClearScreen = power::run(&greeter, command).await {
           execute!(io::stdout(), LeaveAlternateScreen)?;
-          terminal.set_cursor(1, 1)?;
+          terminal.set_cursor_position((1, 1))?;
           terminal.clear()?;
           disable_raw_mode()?;
 

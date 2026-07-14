@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use tui::style::{Color, Style};
+use ratatui::style::{Color, Style};
 
 #[derive(Clone)]
 enum Component {

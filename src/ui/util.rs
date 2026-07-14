@@ -1,5 +1,5 @@
 use ansi_to_tui::IntoText;
-use tui::{
+use ratatui::{
   prelude::Rect,
   text::Text,
   widgets::{Paragraph, Wrap},
@@ -137,7 +137,7 @@ pub fn get_message_height(greeter: &Greeter, padding: u16, fallback: u16) -> (Op
 
 #[cfg(test)]
 mod test {
-  use tui::{
+  use ratatui::{
     prelude::Rect,
     style::{Color, Style},
     text::{Line, Span, Text},

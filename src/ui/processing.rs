@@ -36,7 +36,7 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
     .direction(Direction::Vertical)
     .constraints(constraints.as_ref())
     .split(frame);
-  let text = Span::from(fl!("wait"));
+  let text = Span::from(text!(greeter, wait));
   let paragraph = Paragraph::new(text).alignment(Alignment::Center);
 
   f.render_widget(paragraph, chunks[0]);

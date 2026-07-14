@@ -10,6 +10,7 @@ mod info;
 mod ipc;
 mod keyboard;
 mod power;
+mod text;
 mod ui;
 
 #[cfg(test)]

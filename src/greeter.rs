@@ -1,5 +1,4 @@
 use std::{
-  convert::TryInto,
   env,
   error::Error,
   ffi::OsStr,
@@ -9,12 +8,8 @@ use std::{
   sync::Arc,
 };
 
-use chrono::{
-  Locale,
-  format::{Item, StrftimeItems},
-};
+use chrono::format::{Item, StrftimeItems};
 use getopts::{Fail, Matches, Options};
-use i18n_embed::DesktopLanguageRequester;
 use tokio::{
   net::UnixStream,
   sync::{RwLock, RwLockWriteGuard, mpsc::Sender},
@@ -37,6 +32,7 @@ use crate::{
     get_users,
   },
   power::PowerOption,
+  text::Text,
   ui::{
     common::{masked::MaskedString, menu::Menu, style::Theme},
     power::Power,
@@ -46,7 +42,6 @@ use crate::{
 };
 
 const DEFAULT_LOG_FILE: &str = "/tmp/tuigreet.log";
-const DEFAULT_LOCALE: Locale = Locale::en_US;
 const DEFAULT_ASTERISKS_CHARS: &str = "*";
 // `startx` wants an absolute path to the executable as a first argument.
 // We don't want to resolve the session command in the greeter though, so it should be additionally wrapped with a known noop command (like `/usr/bin/env`).
@@ -116,8 +111,7 @@ pub struct Greeter {
   pub logfile: String,
   pub logger: Option<WorkerGuard>,
 
-  #[default(DEFAULT_LOCALE)]
-  pub locale: Locale,
+  pub text: Text,
   pub config: Option<Matches>,
   pub socket: String,
   pub stream: Option<Arc<RwLock<UnixStream>>>,
@@ -213,10 +207,8 @@ impl Greeter {
     let mut greeter = Self::default();
 
     greeter.events = Some(events);
-    greeter.set_locale();
-
     greeter.powers = Menu {
-      title: fl!("title_power"),
+      title: text!(greeter, title_power),
       options: Default::default(),
       selected: 0,
     };
@@ -250,7 +242,7 @@ impl Greeter {
     }
 
     greeter.sessions = Menu {
-      title: fl!("title_session"),
+      title: text!(greeter, title_session),
       options: sessions,
       selected: 0,
     };
@@ -442,19 +434,6 @@ impl Greeter {
     }
   }
 
-  // Sets the locale that will be used for this invocation from environment.
-  fn set_locale(&mut self) {
-    let locale = DesktopLanguageRequester::requested_languages()
-      .into_iter()
-      .next()
-      .and_then(|locale| locale.region.map(|region| format!("{}_{region}", locale.language)))
-      .and_then(|id| id.as_str().try_into().ok());
-
-    if let Some(locale) = locale {
-      self.locale = locale;
-    }
-  }
-
   pub fn options() -> Options {
     let mut opts = Options::new();
 
@@ -494,6 +473,17 @@ impl Greeter {
     opts.optopt("w", "width", "width of the main prompt (default: 80)", "WIDTH");
     opts.optflag("i", "issue", "show the host's issue file");
     opts.optopt("g", "greeting", "show custom text above login prompt", "GREETING");
+    opts.optflag(
+      "",
+      "text-config",
+      "load text overrides from system and user configuration files",
+    );
+    opts.optopt(
+      "",
+      "text-config-file",
+      "load text overrides from an explicit file",
+      "FILE",
+    );
     opts.optflag("t", "time", "display the current date and time");
     opts.optopt(
       "",
@@ -613,6 +603,14 @@ impl Greeter {
       process::exit(0);
     }
 
+    if self.config().opt_present("text-config") {
+      self.text.load_standard()?;
+    }
+    if let Some(path) = self.config().opt_str("text-config-file") {
+      self.text.load_file(PathBuf::from(path).as_path())?;
+    }
+    self.powers.title = text!(self, title_power);
+
     if self.config().opt_present("debug") {
       self.debug = true;
 
@@ -676,7 +674,7 @@ impl Greeter {
       }
 
       self.users = Menu {
-        title: fl!("title_users"),
+        title: text!(self, title_users),
         options: get_users(min_uid, max_uid),
         selected: 0,
       };
@@ -739,7 +737,7 @@ impl Greeter {
 
     self.powers.options.push(Power {
       action: PowerOption::Shutdown,
-      label: fl!("shutdown"),
+      label: text!(self, shutdown),
       command: self
         .config()
         .opt_str("power-shutdown")
@@ -748,7 +746,7 @@ impl Greeter {
 
     self.powers.options.push(Power {
       action: PowerOption::Reboot,
-      label: fl!("reboot"),
+      label: text!(self, reboot),
       command: self
         .config()
         .opt_str("power-reboot")
@@ -757,7 +755,7 @@ impl Greeter {
 
     self.powers.options.push(Power {
       action: PowerOption::Suspend,
-      label: fl!("suspend"),
+      label: text!(self, suspend),
       command: self
         .config()
         .opt_str("power-suspend")
@@ -766,7 +764,7 @@ impl Greeter {
 
     self.powers.options.push(Power {
       action: PowerOption::Hibernate,
-      label: fl!("hibernate"),
+      label: text!(self, hibernate),
       command: self
         .config()
         .opt_str("power-hibernate")
@@ -984,6 +982,23 @@ mod test {
       (PathBuf::from("/sessions"), SessionType::Wayland)
     );
     assert_eq!(greeter.session_paths[1], (PathBuf::from("/sessions"), SessionType::X11));
+  }
+
+  #[tokio::test]
+  async fn explicit_text_config_overrides_defaults() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("text.conf");
+    std::fs::write(&path, "username=Login:\ntitle_power=Actions\n").unwrap();
+    let mut greeter = Greeter::default();
+
+    greeter
+      .parse_options(&["--text-config-file".as_ref(), path.as_os_str()])
+      .await
+      .unwrap();
+
+    assert_eq!(greeter.text.username, "Login:");
+    assert_eq!(greeter.powers.title, "Actions");
+    assert_eq!(greeter.text.reboot, "Reboot");
   }
 
   #[test]

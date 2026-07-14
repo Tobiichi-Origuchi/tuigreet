@@ -178,14 +178,14 @@ impl Ipc {
             None => {
               Ipc::cancel(greeter).await;
 
-              greeter.message = Some(fl!("command_missing"));
+              greeter.message = Some(text!(greeter, command_missing));
               greeter.reset(false).await;
             },
 
             Some(command) if command.is_empty() => {
               Ipc::cancel(greeter).await;
 
-              greeter.message = Some(fl!("command_missing"));
+              greeter.message = Some(text!(greeter, command_missing));
               greeter.reset(false).await;
             },
 
@@ -229,7 +229,7 @@ impl Ipc {
 
         match error_type {
           ErrorType::AuthError => {
-            greeter.message = Some(fl!("failed"));
+            greeter.message = Some(text!(greeter, failed));
             self
               .send(Request::CreateSession {
                 username: greeter.username.value.clone(),
@@ -240,7 +240,7 @@ impl Ipc {
 
           ErrorType::Error => {
             // Do not display actual message from greetd, which may contain entered information, sometimes passwords.
-            greeter.message = Some("An error was received from greetd".to_string());
+            greeter.message = Some(text!(greeter, greetd_error));
             greeter.reset(false).await;
           },
         }

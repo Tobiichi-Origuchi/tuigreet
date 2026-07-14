@@ -1,6 +1,5 @@
 mod command;
 pub mod common;
-mod i18n;
 pub mod power;
 mod processing;
 mod prompt;
@@ -29,7 +28,6 @@ use tokio::sync::RwLock;
 use util::buttonize;
 
 use self::common::style::{Theme, Themed};
-pub use self::i18n::MESSAGES;
 use crate::{Greeter, Mode, info::capslock_status, ui::util::should_hide_cursor};
 
 const TITLEBAR_INDEX: usize = 1;
@@ -80,7 +78,7 @@ where
       f.render_widget(time, chunks[TITLEBAR_INDEX]);
     }
 
-    let status_block_size_right = 1 + greeter.window_padding() + fl!("status_caps").chars().count() as u16;
+    let status_block_size_right = 1 + greeter.window_padding() + text!(greeter, status_caps).chars().count() as u16;
     let status_block_size_left = (size.width - greeter.window_padding()) - status_block_size_right;
 
     let status_chunks = Layout::default()
@@ -97,24 +95,24 @@ where
       .split(chunks[STATUSBAR_INDEX]);
 
     let session_source_label = match greeter.session_source {
-      SessionSource::Session(_) => fl!("status_session"),
-      _ => fl!("status_command"),
+      SessionSource::Session(_) => text!(greeter, status_session),
+      _ => text!(greeter, status_command),
     };
 
     let session_source = greeter.session_source.label(&greeter).unwrap_or("-");
 
     let status_left_text = Line::from(vec![
       status_label(theme, "ESC"),
-      status_value(&greeter, theme, Button::Other, fl!("action_reset")),
+      status_value(&greeter, theme, Button::Other, text!(greeter, action_reset)),
       Span::from(" "),
       status_label(theme, format!("F{}", greeter.kb_command)),
-      status_value(&greeter, theme, Button::Command, fl!("action_command")),
+      status_value(&greeter, theme, Button::Command, text!(greeter, action_command)),
       Span::from(" "),
       status_label(theme, format!("F{}", greeter.kb_sessions)),
-      status_value(&greeter, theme, Button::Session, fl!("action_session")),
+      status_value(&greeter, theme, Button::Session, text!(greeter, action_session)),
       Span::from(" "),
       status_label(theme, format!("F{}", greeter.kb_power)),
-      status_value(&greeter, theme, Button::Power, fl!("action_power")),
+      status_value(&greeter, theme, Button::Power, text!(greeter, action_power)),
       Span::from(" "),
       status_label(theme, session_source_label),
       status_value(&greeter, theme, Button::Other, session_source),
@@ -124,7 +122,7 @@ where
     f.render_widget(status_left, status_chunks[STATUSBAR_LEFT_INDEX]);
 
     if capslock_status() {
-      let status_right_text = status_label(theme, fl!("status_caps"));
+      let status_right_text = status_label(theme, text!(greeter, status_caps));
       let status_right = Paragraph::new(status_right_text).alignment(Alignment::Right);
 
       f.render_widget(status_right, status_chunks[STATUSBAR_RIGHT_INDEX]);
@@ -152,10 +150,10 @@ where
 fn get_time(greeter: &Greeter) -> String {
   let format = match &greeter.time_format {
     Some(format) => Cow::Borrowed(format),
-    None => Cow::Owned(fl!("date")),
+    None => Cow::Owned(text!(greeter, date)),
   };
 
-  Local::now().format_localized(&format, greeter.locale).to_string()
+  Local::now().format(&format).to_string()
 }
 
 fn status_label<'s, S>(theme: &Theme, text: S) -> Span<'s>

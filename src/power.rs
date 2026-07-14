@@ -106,7 +106,7 @@ pub async fn power(greeter: &mut Greeter, option: PowerOption) {
       let _ = sender.send(Event::PowerCommand(command)).await;
     }
   } else {
-    greeter.message = Some(fl!("command_missing"));
+    greeter.message = Some(text!(greeter, command_missing));
   }
 }
 
@@ -118,20 +118,24 @@ pub enum PowerPostAction {
 pub async fn run(greeter: &Arc<RwLock<Greeter>>, mut command: Command) -> PowerPostAction {
   tracing::info!("executing power command: {:?}", command);
 
-  greeter.write().await.mode = Mode::Processing;
+  let text = {
+    let mut greeter = greeter.write().await;
+    greeter.mode = Mode::Processing;
+    greeter.text.clone()
+  };
 
   let message = match command.output().await {
     Ok(result) => match (result.status, result.stderr) {
       (status, _) if status.success() => None,
       (status, output) => {
-        let status = format!("{} {status}", fl!("command_exited"));
+        let status = format!("{} {status}", text.command_exited);
         let output = String::from_utf8(output).unwrap_or_default();
 
         Some(format!("{status}\n{output}"))
       },
     },
 
-    Err(err) => Some(format!("{}: {err}", fl!("command_failed"))),
+    Err(err) => Some(format!("{}: {err}", text.command_failed)),
   };
 
   tracing::info!("power command exited with: {:?}", message);

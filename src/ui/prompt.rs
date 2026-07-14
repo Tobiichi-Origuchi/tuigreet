@@ -43,7 +43,7 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
     height - (2 * container_padding),
   );
 
-  let hostname = Span::from(titleize(&fl!("title_authenticate", hostname = get_hostname())));
+  let hostname = Span::from(titleize(&greeter.text.authenticate_title(&get_hostname())));
   let block = Block::default()
     .title(hostname)
     .title_style(theme.of(&[Themed::Title]))
@@ -79,11 +79,11 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
   }
 
   let username_label = if greeter.user_menu && greeter.username.value.is_empty() {
-    let prompt_text = Span::from(fl!("select_user"));
+    let prompt_text = Span::from(text!(greeter, select_user));
 
     Paragraph::new(prompt_text).alignment(Alignment::Center)
   } else {
-    let username_text = prompt_value(theme, Some(fl!("username")));
+    let username_text = prompt_value(theme, Some(text!(greeter, username)));
 
     Paragraph::new(username_text)
   };
@@ -100,16 +100,16 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
         f.render_widget(
           username_value,
           Rect::new(
-            1 + chunks[USERNAME_INDEX].x + fl!("username").chars().count() as u16,
+            1 + chunks[USERNAME_INDEX].x + text!(greeter, username).chars().count() as u16,
             chunks[USERNAME_INDEX].y,
-            get_input_width(greeter, width, &Some(fl!("username"))),
+            get_input_width(greeter, width, &Some(text!(greeter, username))),
             1,
           ),
         );
       }
 
       let answer_text = if greeter.working {
-        Span::from(fl!("wait"))
+        Span::from(text!(greeter, wait))
       } else {
         prompt_value(theme, greeter.prompt.as_ref())
       };
@@ -169,7 +169,7 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
       let offset = get_cursor_offset(greeter, username_length);
 
       Ok((
-        2 + cursor.x + fl!("username").chars().count() as u16 + offset as u16,
+        2 + cursor.x + text!(greeter, username).chars().count() as u16 + offset as u16,
         USERNAME_INDEX as u16 + cursor.y,
       ))
     },

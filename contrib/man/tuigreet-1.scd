@@ -60,6 +60,15 @@ tuigreet - A graphical console greeter for greetd
 
 	This option is mutually exclusive with *--issue*.
 
+*--text-config*
+	Load text overrides from */etc/tuigreet/text.conf*, then from
+	*$XDG_CONFIG_HOME/tuigreet/text.conf* or *$HOME/.config/tuigreet/text.conf*.
+	No text configuration is read unless this option is present.
+
+*--text-config-file FILE*
+	Load text overrides from FILE. If *--text-config* is also present, FILE is
+	applied last. The file uses key=value entries.
+
 *-t, --time*
 	Print the current date and time at the top of the screen.
 

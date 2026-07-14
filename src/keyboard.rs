@@ -99,7 +99,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
     // F3 will display the session selection menu. If we are already in one of
     // the popup screens, we set the previous screen as being the current
     // previous screen.
-    KeyEvent { code: KeyCode::F(i), .. } if i == greeter.kb_sessions => {
+    KeyEvent { code: KeyCode::F(i), .. } if i == greeter.kb_sessions && !greeter.sessions.options.is_empty() => {
       greeter.previous_mode = match greeter.mode {
         Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => greeter.previous_mode,
         _ => greeter.mode,
@@ -111,7 +111,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
     // F12 will display the user selection menu. If we are already in one of the
     // popup screens, we set the previous screen as being the current previous
     // screen.
-    KeyEvent { code: KeyCode::F(i), .. } if i == greeter.kb_power => {
+    KeyEvent { code: KeyCode::F(i), .. } if i == greeter.kb_power && !greeter.powers.options.is_empty() => {
       greeter.previous_mode = match greeter.mode {
         Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => greeter.previous_mode,
         _ => greeter.mode,
@@ -144,19 +144,19 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
     // Handle moving down in menus.
     KeyEvent { code: KeyCode::Down, .. } => {
       if let Mode::Users = greeter.mode
-        && greeter.users.selected < greeter.users.options.len() - 1
+        && greeter.users.selected + 1 < greeter.users.options.len()
       {
         greeter.users.selected += 1;
       }
 
       if let Mode::Sessions = greeter.mode
-        && greeter.sessions.selected < greeter.sessions.options.len() - 1
+        && greeter.sessions.selected + 1 < greeter.sessions.options.len()
       {
         greeter.sessions.selected += 1;
       }
 
       if let Mode::Power = greeter.mode
-        && greeter.powers.selected < greeter.powers.options.len() - 1
+        && greeter.powers.selected + 1 < greeter.powers.options.len()
       {
         greeter.powers.selected += 1;
       }
@@ -195,7 +195,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
     KeyEvent { code: KeyCode::Enter, .. } => match greeter.mode {
       Mode::Username if !greeter.username.value.is_empty() => validate_username(&mut greeter, &ipc).await,
 
-      Mode::Username if greeter.user_menu => {
+      Mode::Username if greeter.user_menu && !greeter.users.options.is_empty() => {
         greeter.previous_mode = match greeter.mode {
           Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => greeter.previous_mode,
           _ => greeter.mode,
@@ -392,7 +392,12 @@ mod test {
   use crate::{
     Greeter, Mode,
     ipc::Ipc,
-    ui::{common::masked::MaskedString, sessions::SessionSource},
+    power::PowerOption,
+    ui::{
+      common::masked::MaskedString,
+      power::Power,
+      sessions::{Session, SessionSource},
+    },
   };
 
   #[tokio::test]
@@ -557,6 +562,15 @@ mod test {
   async fn f_menu() {
     let greeter = Arc::new(RwLock::new(Greeter::default()));
 
+    {
+      let mut greeter = greeter.write().await;
+      greeter.sessions.options.push(Session::default());
+      greeter.powers.options.push(Power {
+        action: PowerOption::Shutdown,
+        ..Default::default()
+      });
+    }
+
     for (key, mode) in [(KeyCode::F(3), Mode::Sessions), (KeyCode::F(12), Mode::Power)] {
       {
         let mut greeter = greeter.write().await;
@@ -598,6 +612,15 @@ mod test {
   async fn f_menu_rebinded() {
     let greeter = Arc::new(RwLock::new(Greeter::default()));
 
+    {
+      let mut greeter = greeter.write().await;
+      greeter.sessions.options.push(Session::default());
+      greeter.powers.options.push(Power {
+        action: PowerOption::Shutdown,
+        ..Default::default()
+      });
+    }
+
     for (key, mode) in [(KeyCode::F(1), Mode::Sessions), (KeyCode::F(11), Mode::Power)] {
       {
         let mut greeter = greeter.write().await;
@@ -636,6 +659,21 @@ mod test {
         }
       }
     }
+  }
+
+  #[tokio::test]
+  async fn empty_menu_does_not_open_or_panic() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+
+    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::F(3), KeyModifiers::empty()), Ipc::new()).await;
+    assert!(result.is_ok());
+    assert_eq!(greeter.read().await.mode, Mode::Username);
+
+    greeter.write().await.mode = Mode::Sessions;
+
+    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Down, KeyModifiers::empty()), Ipc::new()).await;
+    assert!(result.is_ok());
+    assert_eq!(greeter.read().await.sessions.selected, 0);
   }
 
   #[tokio::test]

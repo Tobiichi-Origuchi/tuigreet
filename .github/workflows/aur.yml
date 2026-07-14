@@ -1,4 +1,4 @@
-name: Publish AUR packages
+name: Publish AUR release packages
 
 on:
   workflow_call:
@@ -58,12 +58,10 @@ jobs:
           runuser -u builder -- git config --global user.email 'Tobiichi-Origuchi@users.noreply.github.com'
       - name: Prepare and validate packages
         run: |
-          for package in tuigreety tuigreety-bin tuigreety-git; do
+          for package in tuigreety tuigreety-bin; do
             directory="packaging/aur/$package"
             cp packaging/aur/tuigreet.conf "$directory/tuigreet.conf"
-            if [[ $package != tuigreety-git ]]; then
-              sed -i "s/^pkgver=.*/pkgver=$VERSION/" "$directory/PKGBUILD"
-            fi
+            sed -i "s/^pkgver=.*/pkgver=$VERSION/" "$directory/PKGBUILD"
             chown -R builder:builder "$directory"
             runuser -u builder -- sh -c "cd '$directory' && updpkgsums"
             runuser -u builder -- sh -c "cd '$directory' && makepkg --cleanbuild --noconfirm"
@@ -71,7 +69,7 @@ jobs:
           done
       - name: Publish packages
         run: |
-          for package in tuigreety tuigreety-bin tuigreety-git; do
+          for package in tuigreety tuigreety-bin; do
             directory="packaging/aur/$package"
             repository="/home/builder/$package"
             runuser -u builder -- git -c init.defaultBranch=master clone "ssh://aur@aur.archlinux.org/$package.git" "$repository"

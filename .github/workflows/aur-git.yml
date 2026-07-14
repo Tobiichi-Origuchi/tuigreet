@@ -1,0 +1,68 @@
+name: Publish AUR git package
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - packaging/aur/tuigreety-git/PKGBUILD
+      - packaging/aur/tuigreet.conf
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aur-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install packaging tools
+        run: pacman -Syu --noconfirm git openssh pacman-contrib rustup scdoc greetd
+      - uses: actions/checkout@v7.0.0
+      - name: Configure build and SSH users
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          test -n "$AUR_SSH_PRIVATE_KEY"
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          install -d -m700 -o builder -g builder /home/builder/.ssh
+          install -m600 -o builder -g builder /dev/null /home/builder/.ssh/aur
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > /home/builder/.ssh/aur
+          cat > /home/builder/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+          EOF
+          ssh-keyscan -t ed25519 aur.archlinux.org > /home/builder/.ssh/known_hosts
+          test "$(ssh-keygen -lf /home/builder/.ssh/known_hosts -E sha256 | awk '{print $2}')" = 'SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4'
+          chown builder:builder /home/builder/.ssh/config /home/builder/.ssh/known_hosts
+          chmod 600 /home/builder/.ssh/config /home/builder/.ssh/known_hosts
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          runuser -u builder -- git config --global user.name 'Tobiichi Origuchi'
+          runuser -u builder -- git config --global user.email 'Tobiichi-Origuchi@users.noreply.github.com'
+      - name: Prepare and validate package
+        run: |
+          directory=packaging/aur/tuigreety-git
+          cp packaging/aur/tuigreet.conf "$directory/tuigreet.conf"
+          chown -R builder:builder "$directory"
+          runuser -u builder -- sh -c "cd '$directory' && updpkgsums"
+          runuser -u builder -- sh -c "cd '$directory' && makepkg --cleanbuild --noconfirm"
+          runuser -u builder -- sh -c "cd '$directory' && makepkg --printsrcinfo > .SRCINFO"
+      - name: Publish package
+        run: |
+          directory=packaging/aur/tuigreety-git
+          repository=/home/builder/tuigreety-git
+          runuser -u builder -- git clone ssh://aur@aur.archlinux.org/tuigreety-git.git "$repository"
+          install -m644 -o builder -g builder "$directory/PKGBUILD" "$repository/PKGBUILD"
+          install -m644 -o builder -g builder "$directory/.SRCINFO" "$repository/.SRCINFO"
+          install -m644 -o builder -g builder "$directory/tuigreet.conf" "$repository/tuigreet.conf"
+          runuser -u builder -- sh -c "cd '$repository' && git add PKGBUILD .SRCINFO tuigreet.conf"
+          if ! runuser -u builder -- sh -c "cd '$repository' && git diff --cached --quiet"; then
+            runuser -u builder -- sh -c "cd '$repository' && git commit -m 'Update build instructions' && git push origin master"
+          fi

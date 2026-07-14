@@ -589,11 +589,15 @@ impl Greeter {
     }
 
     if let Some(dirs) = self.option("sessions") {
-      self.session_paths.extend(env::split_paths(&dirs).map(|dir| (dir, SessionType::Wayland)));
+      for dir in env::split_paths(&dirs) {
+        self.add_session_path(dir, SessionType::Wayland);
+      }
     }
 
     if let Some(dirs) = self.option("xsessions") {
-      self.session_paths.extend(env::split_paths(&dirs).map(|dir| (dir, SessionType::X11)));
+      for dir in env::split_paths(&dirs) {
+        self.add_session_path(dir, SessionType::X11);
+      }
     }
 
     if self.option("session-wrapper").is_some() {
@@ -647,6 +651,12 @@ impl Greeter {
 
   pub fn set_prompt(&mut self, prompt: &str) {
     self.prompt = if prompt.ends_with(' ') { Some(prompt.into()) } else { Some(format!("{prompt} ")) };
+  }
+
+  fn add_session_path(&mut self, path: PathBuf, session_type: SessionType) {
+    if !self.session_paths.iter().any(|(known_path, known_type)| known_path == &path && known_type == &session_type) {
+      self.session_paths.push((path, session_type));
+    }
   }
 
   pub fn remove_prompt(&mut self) {
@@ -724,8 +734,13 @@ fn print_version() {
 
 #[cfg(test)]
 mod test {
+  use std::path::PathBuf;
+
   use super::print_information;
-  use crate::{Greeter, SecretDisplay, ui::sessions::SessionSource};
+  use crate::{
+    Greeter, SecretDisplay,
+    ui::sessions::{SessionSource, SessionType},
+  };
 
   #[test]
   fn test_prompt_width() {
@@ -761,6 +776,17 @@ mod test {
     assert!(print_information(&["tuigreet", "--help"]));
     assert!(print_information(&["tuigreet", "-v"]));
     assert!(!print_information(&["tuigreet", "--time"]));
+  }
+
+  #[tokio::test]
+  async fn test_session_paths_are_deduplicated() {
+    let mut greeter = Greeter::default();
+
+    greeter.parse_options(&["--sessions", "/sessions:/sessions", "--xsessions", "/sessions:/sessions"]).await.unwrap();
+
+    assert_eq!(greeter.session_paths.len(), 2);
+    assert_eq!(greeter.session_paths[0], (PathBuf::from("/sessions"), SessionType::Wayland));
+    assert_eq!(greeter.session_paths[1], (PathBuf::from("/sessions"), SessionType::X11));
   }
 
   #[tokio::test]

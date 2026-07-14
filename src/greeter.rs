@@ -278,6 +278,8 @@ impl Greeter {
       }
     }
 
+    greeter.select_only_user();
+
     // Same thing, but not user specific.
     if greeter.remember_session {
       if let Ok(command) = get_last_command() {
@@ -821,6 +823,15 @@ impl Greeter {
     };
   }
 
+  fn select_only_user(&mut self) {
+    if self.username.value.is_empty()
+      && self.user_menu
+      && let [user] = self.users.options.as_slice()
+    {
+      self.username = MaskedString::from(user.username.clone(), user.name.clone());
+    }
+  }
+
   fn add_session_path(&mut self, path: PathBuf, session_type: SessionType) {
     if !self
       .session_paths
@@ -939,7 +950,11 @@ mod test {
   use crate::{
     Greeter,
     SecretDisplay,
-    ui::sessions::{SessionSource, SessionType},
+    ui::{
+      common::menu::Menu,
+      sessions::{SessionSource, SessionType},
+      users::User,
+    },
   };
 
   #[test]
@@ -1027,6 +1042,49 @@ mod test {
         .iter()
         .all(|session| session.command == "true" && session.path.is_none())
     );
+  }
+
+  #[test]
+  fn sole_menu_user_is_preselected() {
+    let mut greeter = Greeter::default();
+    greeter.user_menu = true;
+    greeter.users = Menu {
+      title: String::new(),
+      options: vec![User {
+        username: "origuchi".into(),
+        name: Some("Origuchi".into()),
+      }],
+      selected: 0,
+    };
+
+    greeter.select_only_user();
+
+    assert_eq!(greeter.username.value, "origuchi");
+    assert_eq!(greeter.username.mask.as_deref(), Some("Origuchi"));
+  }
+
+  #[test]
+  fn multiple_menu_users_are_not_preselected() {
+    let mut greeter = Greeter::default();
+    greeter.user_menu = true;
+    greeter.users = Menu {
+      title: String::new(),
+      options: vec![
+        User {
+          username: "one".into(),
+          name: None,
+        },
+        User {
+          username: "two".into(),
+          name: None,
+        },
+      ],
+      selected: 0,
+    };
+
+    greeter.select_only_user();
+
+    assert!(greeter.username.value.is_empty());
   }
 
   #[tokio::test]

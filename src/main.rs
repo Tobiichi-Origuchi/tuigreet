@@ -76,6 +76,29 @@ where
 
   register_panic_handler();
 
+  let ipc = Ipc::new();
+  let has_preselected_user = !greeter.username.value.is_empty();
+  if has_preselected_user {
+    greeter.working = true;
+  }
+  let greeter = Arc::new(RwLock::new(greeter));
+
+  if has_preselected_user {
+    tracing::info!("creating initial session for preselected user");
+
+    ipc
+      .send(Request::CreateSession {
+        username: greeter.read().await.username.value.clone(),
+      })
+      .await;
+
+    // Resolve the first real greetd prompt before entering the alternate
+    // screen. This keeps the first visible frame at its final height without
+    // guessing whether PAM will ask for a password, MFA token, or other input.
+    let mut initial_ipc = ipc.clone();
+    initial_ipc.handle(greeter.clone()).await?;
+  }
+
   #[cfg(not(test))]
   {
     enable_raw_mode()?;
@@ -83,22 +106,6 @@ where
   }
 
   let mut terminal = Terminal::new(backend)?;
-
-  let ipc = Ipc::new();
-
-  if greeter.remember && !greeter.username.value.is_empty() {
-    greeter.working = true;
-
-    tracing::info!("creating remembered session for user {}", greeter.username.value);
-
-    ipc
-      .send(Request::CreateSession {
-        username: greeter.username.value.clone(),
-      })
-      .await;
-  }
-
-  let greeter = Arc::new(RwLock::new(greeter));
   let mut cursor_interval = tokio::time::interval(CURSOR_BLINK_INTERVAL);
   cursor_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
   cursor_interval.tick().await;

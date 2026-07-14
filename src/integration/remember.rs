@@ -28,6 +28,7 @@ async fn remember_username() {
       runner.wait_until_buffer_contains("Username:").await;
 
       assert!(runner.output().await.contains("Username: apognu"));
+      assert!(runner.output().await.contains("Password:"));
 
       runner.wait_until_buffer_contains("Password:").await;
       runner.send_key(KeyCode::Esc).await;

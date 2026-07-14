@@ -13,7 +13,7 @@ use chrono::{
   Locale,
   format::{Item, StrftimeItems},
 };
-use getopts::{Matches, Options};
+use getopts::{Fail, Matches, Options};
 use i18n_embed::DesktopLanguageRequester;
 use tokio::{
   net::UnixStream,
@@ -478,7 +478,7 @@ impl Greeter {
   {
     let opts = Greeter::options();
 
-    self.config = match opts.parse(args) {
+    self.config = match parse_options_ignoring_unknown(&opts, args) {
       Ok(matches) => Some(matches),
       Err(err) => return Err(err.into()),
     };
@@ -650,6 +650,38 @@ fn print_usage(opts: Options) {
   eprint!("{}", opts.usage("Usage: tuigreet [OPTIONS]"));
 }
 
+fn parse_options_ignoring_unknown<S>(opts: &Options, args: &[S]) -> Result<Matches, Fail>
+where
+  S: AsRef<OsStr>,
+{
+  let mut args: Vec<&OsStr> = args.iter().map(AsRef::as_ref).collect();
+
+  loop {
+    match opts.parse(&args) {
+      Ok(matches) => return Ok(matches),
+      Err(Fail::UnrecognizedOption(name)) => {
+        let Some(index) = args.iter().position(|arg| option_has_name(arg, &name)) else {
+          return Err(Fail::UnrecognizedOption(name));
+        };
+        args.remove(index);
+      }
+      Err(err) => return Err(err),
+    }
+  }
+}
+
+fn option_has_name(arg: &OsStr, name: &str) -> bool {
+  let Some(arg) = arg.to_str() else {
+    return false;
+  };
+
+  if let Some(long) = arg.strip_prefix("--") {
+    return long.split_once('=').map_or(long, |(name, _)| name) == name;
+  }
+
+  name.chars().count() == 1 && arg.strip_prefix('-').is_some_and(|shorts| shorts.chars().any(|short| name.chars().next() == Some(short)))
+}
+
 fn print_version() {
   println!("tuigreet {} ({})", env!("VERSION"), env!("TARGET"));
   println!("Copyright (C) 2020 Antoine POPINEAU <https://github.com/apognu/tuigreet>.");
@@ -699,6 +731,15 @@ mod test {
       (&[], true, None),
       // Valid combinations
       (&["--cmd", "hello"], true, None),
+      (
+        &["--time", "--power-suspend", "systemctl suspend", "--future-option=value", "--cmd", "hello"],
+        true,
+        Some(|greeter| {
+          assert!(greeter.config().opt_present("time"));
+          assert!(matches!(&greeter.session_source, SessionSource::DefaultCommand(cmd, None) if cmd == "hello"));
+        }),
+      ),
+      (&["-z", "--remember"], true, Some(|greeter| assert!(greeter.remember))),
       (
         &[
           "--cmd",
@@ -751,11 +792,12 @@ mod test {
           assert!(matches!(greeter.xsession_wrapper, None));
         }),
       ),
+      // Unknown options are ignored
+      (&["--asterisk-char", ""], true, None),
+      (&["--min-uid", "10000", "--max-uid", "5000"], true, None),
       // Invalid combinations
       (&["--remember-session", "--remember-user-session"], false, None),
-      (&["--asterisk-char", ""], false, None),
       (&["--remember-user-session"], false, None),
-      (&["--min-uid", "10000", "--max-uid", "5000"], false, None),
       (&["--issue", "--greeting", "Hello, world!"], false, None),
       (&["--kb-command", "F2", "--kb-sessions", "F2"], false, None),
       (&["--time-format", "%i %"], false, None),

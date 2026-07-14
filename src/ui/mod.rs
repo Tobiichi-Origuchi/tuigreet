@@ -18,6 +18,7 @@ use chrono::prelude::*;
 use ratatui::{
   Frame as CrosstermFrame,
   Terminal,
+  buffer::Buffer,
   layout::{Alignment, Constraint, Direction, Layout},
   style::Modifier,
   text::{Line, Span},
@@ -44,7 +45,11 @@ enum Button {
   Other,
 }
 
-pub async fn draw<B>(greeter: Arc<RwLock<Greeter>>, terminal: &mut Terminal<B>) -> Result<(), Box<dyn Error>>
+pub async fn draw<B>(
+  greeter: Arc<RwLock<Greeter>>,
+  terminal: &mut Terminal<B>,
+  cursor_on: bool,
+) -> Result<(), Box<dyn Error>>
 where
   B: ratatui::backend::Backend,
   B::Error: 'static,
@@ -137,14 +142,31 @@ where
       _ => self::prompt::draw(&mut greeter, f).ok(),
     };
 
-    if !hide_cursor && let Some(cursor) = cursor {
-      f.set_cursor_position((cursor.0 - 1, cursor.1 - 1));
-    }
+    draw_cursor(f.buffer_mut(), cursor, cursor_on && !hide_cursor);
   })?;
 
   io::stdout().flush()?;
 
   Ok(())
+}
+
+fn draw_cursor(buffer: &mut Buffer, cursor: Option<(u16, u16)>, visible: bool) {
+  if !visible {
+    return;
+  }
+
+  let Some((x, y)) = cursor.and_then(|(x, y)| Some((x.checked_sub(1)?, y.checked_sub(1)?))) else {
+    return;
+  };
+  let Some(cell) = buffer.cell_mut((x, y)) else {
+    return;
+  };
+
+  if cell.symbol().trim().is_empty() {
+    cell.set_symbol("_");
+  } else {
+    cell.modifier.insert(Modifier::UNDERLINED);
+  }
 }
 
 fn get_time(greeter: &Greeter) -> String {
@@ -195,5 +217,32 @@ where
   match text {
     Some(text) => Span::styled(text.into(), theme.of(&[Themed::Prompt]).add_modifier(Modifier::BOLD)),
     None => Span::from(""),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use ratatui::layout::Rect;
+
+  use super::*;
+
+  #[test]
+  fn software_cursor_draws_blank_and_text_cells() {
+    let mut blank = Buffer::empty(Rect::new(0, 0, 2, 1));
+    draw_cursor(&mut blank, Some((1, 1)), true);
+    assert_eq!(blank[(0, 0)].symbol(), "_");
+
+    let mut text = Buffer::with_lines(["a"]);
+    draw_cursor(&mut text, Some((1, 1)), true);
+    assert_eq!(text[(0, 0)].symbol(), "a");
+    assert!(text[(0, 0)].modifier.contains(Modifier::UNDERLINED));
+  }
+
+  #[test]
+  fn hidden_software_cursor_does_not_change_buffer() {
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 1, 1));
+    draw_cursor(&mut buffer, Some((1, 1)), false);
+
+    assert_eq!(buffer[(0, 0)].symbol(), " ");
   }
 }

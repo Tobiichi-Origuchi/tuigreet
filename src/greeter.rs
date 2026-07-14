@@ -18,7 +18,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use zeroize::Zeroize;
 
 use crate::{
-  event::Event,
+  event::{DEFAULT_REFRESH_RATE, Event, MAX_REFRESH_RATE},
   info::{
     get_issue,
     get_last_command,
@@ -168,6 +168,8 @@ pub struct Greeter {
   pub time: bool,
   // Time format
   pub time_format: Option<String>,
+  #[default(DEFAULT_REFRESH_RATE)]
+  pub refresh_rate: u16,
   // Greeting message (MOTD) to use to welcome the user.
   pub greeting: Option<String>,
   // Transaction message to show to the user.
@@ -491,6 +493,12 @@ impl Greeter {
       "custom strftime format for displaying date and time",
       "FORMAT",
     );
+    opts.optopt(
+      "",
+      "refresh-rate",
+      "screen refresh rate in frames per second (default: 2, maximum: 240)",
+      "FPS",
+    );
     opts.optflag("r", "remember", "remember last logged-in username");
     opts.optflag("", "remember-session", "remember last selected session");
     opts.optflag(
@@ -652,6 +660,14 @@ impl Greeter {
       }
 
       self.time_format = Some(format);
+    }
+
+    if let Some(value) = self.config().opt_str("refresh-rate") {
+      self.refresh_rate = value
+        .parse::<u16>()
+        .ok()
+        .filter(|rate| (1..=MAX_REFRESH_RATE).contains(rate))
+        .ok_or_else(|| format!("--refresh-rate must be between 1 and {MAX_REFRESH_RATE}"))?;
     }
 
     if self.config().opt_present("user-menu") {
@@ -1115,6 +1131,11 @@ mod test {
         None,
       ),
       (&["--mock"], true, Some(|greeter| assert!(greeter.mock))),
+      (
+        &["--refresh-rate", "60"],
+        true,
+        Some(|greeter| assert_eq!(greeter.refresh_rate, 60)),
+      ),
       // Unknown options are ignored
       (&["--asterisk-char", ""], true, None),
       (&["--min-uid", "10000", "--max-uid", "5000"], true, None),
@@ -1124,6 +1145,9 @@ mod test {
       (&["--issue", "--greeting", "Hello, world!"], false, None),
       (&["--kb-command", "F2", "--kb-sessions", "F2"], false, None),
       (&["--time-format", "%i %"], false, None),
+      (&["--refresh-rate", "0"], false, None),
+      (&["--refresh-rate", "241"], false, None),
+      (&["--refresh-rate", "fast"], false, None),
       (&["--cmd", "cmd", "--env"], false, None),
       (&["--cmd", "cmd", "--env", "A"], false, None),
     ];

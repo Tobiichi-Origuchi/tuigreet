@@ -16,11 +16,15 @@ mod ui;
 #[cfg(test)]
 mod integration;
 
-use std::{env, error::Error, fs::OpenOptions, io, process, sync::Arc};
+use std::{env, error::Error, fs::OpenOptions, io, process, sync::Arc, time::Duration};
 
 #[cfg(not(test))]
-use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, enable_raw_mode};
 use crossterm::{
+  cursor::Hide,
+  terminal::{Clear, ClearType, EnterAlternateScreen, enable_raw_mode},
+};
+use crossterm::{
+  cursor::Show,
   execute,
   terminal::{LeaveAlternateScreen, disable_raw_mode},
 };
@@ -34,6 +38,14 @@ use tracing_appender::non_blocking::WorkerGuard;
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
 
+#[cfg(not(test))]
+const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
+// Integration tests explicitly request renders and inspect the next frame. A
+// background cursor-only frame would race that protocol; cursor drawing itself
+// is covered by focused buffer tests.
+#[cfg(test)]
+const CURSOR_BLINK_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 #[tokio::main]
 async fn main() {
   let args = env::args().collect::<Vec<_>>();
@@ -44,6 +56,7 @@ async fn main() {
   let backend = CrosstermBackend::new(io::stdout());
   let events = Events::new().await;
   let greeter = Greeter::new(events.sender()).await;
+  events.set_refresh_rate(greeter.refresh_rate);
 
   if let Err(error) = run(backend, greeter, events).await {
     if let Some(AuthStatus::Success) = error.downcast_ref::<AuthStatus>() {
@@ -66,7 +79,7 @@ where
   #[cfg(not(test))]
   {
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All))?;
+    execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All), Hide)?;
   }
 
   let mut terminal = Terminal::new(backend)?;
@@ -86,6 +99,10 @@ where
   }
 
   let greeter = Arc::new(RwLock::new(greeter));
+  let mut cursor_interval = tokio::time::interval(CURSOR_BLINK_INTERVAL);
+  cursor_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+  cursor_interval.tick().await;
+  let mut cursor_on = true;
 
   tokio::task::spawn({
     let greeter = greeter.clone();
@@ -105,8 +122,11 @@ where
       return Err(status.into());
     }
 
-    match events.next().await {
-      Some(Event::Render) => ui::draw(greeter.clone(), &mut terminal).await?,
+    tokio::select! {
+      event = events.next() => match event {
+      Some(Event::Render) => {
+        ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
+      },
       Some(Event::Key(key)) => keyboard::handle(greeter.clone(), key, ipc.clone()).await?,
 
       Some(Event::Exit(status)) => {
@@ -115,7 +135,7 @@ where
 
       Some(Event::PowerCommand(command)) => {
         if let PowerPostAction::ClearScreen = power::run(&greeter, command).await {
-          execute!(io::stdout(), LeaveAlternateScreen)?;
+          execute!(io::stdout(), Show, LeaveAlternateScreen)?;
           terminal.set_cursor_position((1, 1))?;
           terminal.clear()?;
           disable_raw_mode()?;
@@ -125,6 +145,12 @@ where
       },
 
       _ => {},
+      },
+
+      _ = cursor_interval.tick() => {
+        cursor_on = !cursor_on;
+        ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
+      },
     }
   }
 
@@ -142,7 +168,7 @@ async fn exit(greeter: &mut Greeter, status: AuthStatus) {
   #[cfg(not(test))]
   clear_screen();
 
-  let _ = execute!(io::stdout(), LeaveAlternateScreen);
+  let _ = execute!(io::stdout(), Show, LeaveAlternateScreen);
   let _ = disable_raw_mode();
 
   greeter.exit = Some(status);
@@ -155,7 +181,7 @@ fn register_panic_handler() {
     #[cfg(not(test))]
     clear_screen();
 
-    let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    let _ = execute!(io::stdout(), Show, LeaveAlternateScreen);
     let _ = disable_raw_mode();
 
     hook(info);

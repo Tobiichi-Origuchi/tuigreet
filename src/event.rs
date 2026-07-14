@@ -1,4 +1,10 @@
-use std::time::Duration;
+use std::{
+  sync::{
+    Arc,
+    atomic::{AtomicU16, Ordering},
+  },
+  time::Duration,
+};
 
 #[cfg(not(test))]
 use crossterm::event::EventStream;
@@ -11,7 +17,8 @@ use tokio::{
 
 use crate::AuthStatus;
 
-const FRAME_RATE: f64 = 2.0;
+pub const DEFAULT_REFRESH_RATE: u16 = 2;
+pub const MAX_REFRESH_RATE: u16 = 240;
 
 pub enum Event {
   Key(KeyEvent),
@@ -23,14 +30,17 @@ pub enum Event {
 pub struct Events {
   rx: mpsc::Receiver<Event>,
   tx: mpsc::Sender<Event>,
+  refresh_rate: Arc<AtomicU16>,
 }
 
 impl Events {
   pub async fn new() -> Events {
     let (tx, rx) = mpsc::channel(10);
+    let refresh_rate = Arc::new(AtomicU16::new(DEFAULT_REFRESH_RATE));
 
     tokio::task::spawn({
       let tx = tx.clone();
+      let refresh_rate = refresh_rate.clone();
 
       async move {
         #[cfg(not(test))]
@@ -41,9 +51,17 @@ impl Events {
         #[cfg(test)]
         let mut stream = futures_util::stream::pending::<Result<TermEvent, ()>>();
 
-        let mut render_interval = tokio::time::interval(Duration::from_secs_f64(1.0 / FRAME_RATE));
+        let mut current_rate = refresh_rate.load(Ordering::Relaxed);
+        let mut render_interval = tokio::time::interval(frame_duration(current_rate));
 
         loop {
+          let requested_rate = refresh_rate.load(Ordering::Relaxed);
+          if requested_rate != current_rate {
+            current_rate = requested_rate;
+            render_interval = tokio::time::interval(frame_duration(current_rate));
+            render_interval.tick().await;
+          }
+
           let render = render_interval.tick();
           let event = stream.next().fuse();
 
@@ -63,13 +81,13 @@ impl Events {
               }
             }
 
-            _ = render => { let _ = tx.send(Event::Render).await; },
+            _ = render => { let _ = tx.try_send(Event::Render); },
           }
         }
       }
     });
 
-    Events { rx, tx }
+    Events { rx, tx, refresh_rate }
   }
 
   pub async fn next(&mut self) -> Option<Event> {
@@ -78,5 +96,27 @@ impl Events {
 
   pub fn sender(&self) -> Sender<Event> {
     self.tx.clone()
+  }
+
+  pub fn set_refresh_rate(&self, refresh_rate: u16) {
+    self.refresh_rate.store(refresh_rate, Ordering::Relaxed);
+  }
+}
+
+fn frame_duration(refresh_rate: u16) -> Duration {
+  Duration::from_secs_f64(1.0 / f64::from(refresh_rate))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn refresh_rate_can_be_changed() {
+    let events = Events::new().await;
+    events.set_refresh_rate(60);
+
+    assert_eq!(events.refresh_rate.load(Ordering::Relaxed), 60);
+    assert_eq!(frame_duration(2), Duration::from_millis(500));
   }
 }

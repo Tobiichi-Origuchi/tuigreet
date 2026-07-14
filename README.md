@@ -36,6 +36,9 @@ Options:
     -t, --time          display the current date and time
         --time-format FORMAT
                         custom strftime format for displaying date and time
+        --refresh-rate FPS
+                        screen refresh rate in frames per second (default: 2,
+                        maximum: 240)
     -r, --remember      remember last logged-in username
         --remember-session
                         remember last selected session

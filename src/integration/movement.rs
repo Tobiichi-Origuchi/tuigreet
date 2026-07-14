@@ -47,7 +47,7 @@ async fn keyboard_movement() {
         .await;
       runner.wait_for_render().await;
 
-      assert!(runner.output().await.contains("Username:      "));
+      assert!(runner.output().await.contains("Username: _"));
     }
   });
 

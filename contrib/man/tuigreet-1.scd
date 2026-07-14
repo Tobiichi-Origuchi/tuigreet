@@ -76,6 +76,10 @@ tuigreet - A graphical console greeter for greetd
 	Configure a custom strftime-compliant format string for the current date
 	and time.
 
+*--refresh-rate FPS*
+	Set the periodic screen refresh rate. The value must be between 1 and 240;
+	the default is 2. Cursor blinking uses an independent 500 ms timer.
+
 *--user-menu*
 	Allow selecting a user from a graphical menu.
 

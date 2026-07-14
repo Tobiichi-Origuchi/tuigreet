@@ -33,7 +33,7 @@ async fn remember_username() {
       runner.send_key(KeyCode::Esc).await;
       runner.wait_for_render().await;
 
-      assert!(runner.output().await.contains("Username:       "));
+      assert!(runner.output().await.contains("Username: _"));
       assert!(!runner.output().await.contains("Password:"));
     }
   });

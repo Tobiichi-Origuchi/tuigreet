@@ -1,14 +1,13 @@
 use std::time::Duration;
 
+#[cfg(not(test))]
+use crossterm::event::EventStream;
 use crossterm::event::{Event as TermEvent, KeyEvent};
 use futures::{StreamExt, future::FutureExt};
 use tokio::{
   process::Command,
   sync::mpsc::{self, Sender},
 };
-
-#[cfg(not(test))]
-use crossterm::event::EventStream;
 
 use crate::AuthStatus;
 

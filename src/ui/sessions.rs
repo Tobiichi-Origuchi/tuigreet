@@ -3,9 +3,8 @@ use std::{
   path::{Path, PathBuf},
 };
 
-use crate::Greeter;
-
 use super::common::menu::MenuItem;
+use crate::Greeter;
 
 // SessionSource models the selected session and where it comes from.
 //
@@ -32,7 +31,11 @@ impl SessionSource {
       SessionSource::None => None,
       SessionSource::DefaultCommand(command, _) => Some(command),
       SessionSource::Command(command) => Some(command),
-      SessionSource::Session(index) => greeter.sessions.options.get(*index).map(|session| session.name.as_str()),
+      SessionSource::Session(index) => greeter
+        .sessions
+        .options
+        .get(*index)
+        .map(|session| session.name.as_str()),
     }
   }
 
@@ -43,7 +46,11 @@ impl SessionSource {
       SessionSource::None => None,
       SessionSource::DefaultCommand(command, _) => Some(command.as_str()),
       SessionSource::Command(command) => Some(command.as_str()),
-      SessionSource::Session(index) => greeter.sessions.options.get(*index).map(|session| session.command.as_str()),
+      SessionSource::Session(index) => greeter
+        .sessions
+        .options
+        .get(*index)
+        .map(|session| session.command.as_str()),
     }
   }
 
@@ -115,7 +122,11 @@ impl Session {
   where
     P: AsRef<Path>,
   {
-    greeter.sessions.options.iter().find(|session| session.path.as_deref() == Some(path.as_ref()))
+    greeter
+      .sessions
+      .options
+      .iter()
+      .find(|session| session.path.as_deref() == Some(path.as_ref()))
   }
 
   // Retrieves the `Session` that is currently selected.

@@ -24,7 +24,18 @@ use zeroize::Zeroize;
 
 use crate::{
   event::Event,
-  info::{get_issue, get_last_command, get_last_session_path, get_last_user_command, get_last_user_name, get_last_user_session, get_last_user_username, get_min_max_uids, get_sessions, get_users},
+  info::{
+    get_issue,
+    get_last_command,
+    get_last_session_path,
+    get_last_user_command,
+    get_last_user_name,
+    get_last_user_session,
+    get_last_user_username,
+    get_min_max_uids,
+    get_sessions,
+    get_users,
+  },
   power::PowerOption,
   ui::{
     common::{masked::MaskedString, menu::Menu, style::Theme},
@@ -260,7 +271,12 @@ impl Greeter {
         // If a session was saved, use it and its name.
         if let Ok(ref session_path) = get_last_user_session(greeter.username.get()) {
           // Set the selected menu option and the session source.
-          if let Some(index) = greeter.sessions.options.iter().position(|Session { path, .. }| path.as_deref() == Some(session_path)) {
+          if let Some(index) = greeter
+            .sessions
+            .options
+            .iter()
+            .position(|Session { path, .. }| path.as_deref() == Some(session_path))
+          {
             greeter.sessions.selected = index;
             greeter.session_source = SessionSource::Session(greeter.sessions.selected);
           }
@@ -275,7 +291,11 @@ impl Greeter {
       }
 
       if let Ok(ref session_path) = get_last_session_path()
-        && let Some(index) = greeter.sessions.options.iter().position(|Session { path, .. }| path.as_deref() == Some(session_path))
+        && let Some(index) = greeter
+          .sessions
+          .options
+          .iter()
+          .position(|Session { path, .. }| path.as_deref() == Some(session_path))
       {
         greeter.sessions.selected = index;
         greeter.session_source = SessionSource::Session(greeter.sessions.selected);
@@ -331,7 +351,7 @@ impl Greeter {
         Err(_) => {
           eprintln!("GREETD_SOCK must be defined");
           process::exit(1);
-        }
+        },
       };
     }
 
@@ -341,7 +361,7 @@ impl Greeter {
       Err(err) => {
         eprintln!("{err}");
         process::exit(1);
-      }
+      },
     }
   }
 
@@ -438,35 +458,95 @@ impl Greeter {
   pub fn options() -> Options {
     let mut opts = Options::new();
 
-    let xsession_wrapper_desc = format!("wrapper command to initialize X server and launch X11 sessions (default: {DEFAULT_XSESSION_WRAPPER})");
+    let xsession_wrapper_desc =
+      format!("wrapper command to initialize X server and launch X11 sessions (default: {DEFAULT_XSESSION_WRAPPER})");
 
     opts.optflag("h", "help", "show this usage information");
     opts.optflag("v", "version", "print version information");
-    opts.optflagopt("d", "debug", "enable debug logging to the provided file, or to /tmp/tuigreet.log", "FILE");
+    opts.optflagopt(
+      "d",
+      "debug",
+      "enable debug logging to the provided file, or to /tmp/tuigreet.log",
+      "FILE",
+    );
     opts.optopt("c", "cmd", "command to run", "COMMAND");
-    opts.optmulti("", "env", "environment variables to run the default session with (can appear more than once)", "KEY=VALUE");
+    opts.optmulti(
+      "",
+      "env",
+      "environment variables to run the default session with (can appear more than once)",
+      "KEY=VALUE",
+    );
     opts.optopt("s", "sessions", "colon-separated list of Wayland session paths", "DIRS");
-    opts.optopt("", "session-wrapper", "wrapper command to initialize the non-X11 session", "'CMD [ARGS]...'");
+    opts.optopt(
+      "",
+      "session-wrapper",
+      "wrapper command to initialize the non-X11 session",
+      "'CMD [ARGS]...'",
+    );
     opts.optopt("x", "xsessions", "colon-separated list of X11 session paths", "DIRS");
-    opts.optopt("", "xsession-wrapper", xsession_wrapper_desc.as_str(), "'CMD [ARGS]...'");
+    opts.optopt(
+      "",
+      "xsession-wrapper",
+      xsession_wrapper_desc.as_str(),
+      "'CMD [ARGS]...'",
+    );
     opts.optflag("", "no-xsession-wrapper", "do not wrap commands for X11 sessions");
     opts.optopt("w", "width", "width of the main prompt (default: 80)", "WIDTH");
     opts.optflag("i", "issue", "show the host's issue file");
     opts.optopt("g", "greeting", "show custom text above login prompt", "GREETING");
     opts.optflag("t", "time", "display the current date and time");
-    opts.optopt("", "time-format", "custom strftime format for displaying date and time", "FORMAT");
+    opts.optopt(
+      "",
+      "time-format",
+      "custom strftime format for displaying date and time",
+      "FORMAT",
+    );
     opts.optflag("r", "remember", "remember last logged-in username");
     opts.optflag("", "remember-session", "remember last selected session");
-    opts.optflag("", "remember-user-session", "remember last selected session for each user");
+    opts.optflag(
+      "",
+      "remember-user-session",
+      "remember last selected session for each user",
+    );
     opts.optflag("", "user-menu", "allow graphical selection of users from a menu");
-    opts.optopt("", "user-menu-min-uid", "minimum UID to display in the user selection menu", "UID");
-    opts.optopt("", "user-menu-max-uid", "maximum UID to display in the user selection menu", "UID");
+    opts.optopt(
+      "",
+      "user-menu-min-uid",
+      "minimum UID to display in the user selection menu",
+      "UID",
+    );
+    opts.optopt(
+      "",
+      "user-menu-max-uid",
+      "maximum UID to display in the user selection menu",
+      "UID",
+    );
     opts.optopt("", "theme", "define the application theme colors", "THEME");
     opts.optflag("", "asterisks", "display asterisks when a secret is typed");
-    opts.optopt("", "asterisks-char", "characters to be used to redact secrets (default: *)", "CHARS");
-    opts.optopt("", "window-padding", "padding inside the terminal area (default: 0)", "PADDING");
-    opts.optopt("", "container-padding", "padding inside the main prompt container (default: 1)", "PADDING");
-    opts.optopt("", "prompt-padding", "padding between prompt rows (default: 1)", "PADDING");
+    opts.optopt(
+      "",
+      "asterisks-char",
+      "characters to be used to redact secrets (default: *)",
+      "CHARS",
+    );
+    opts.optopt(
+      "",
+      "window-padding",
+      "padding inside the terminal area (default: 0)",
+      "PADDING",
+    );
+    opts.optopt(
+      "",
+      "container-padding",
+      "padding inside the main prompt container (default: 1)",
+      "PADDING",
+    );
+    opts.optopt(
+      "",
+      "prompt-padding",
+      "padding between prompt rows (default: 1)",
+      "PADDING",
+    );
     opts.optopt(
       "",
       "greet-align",
@@ -474,12 +554,36 @@ impl Greeter {
       "[left|center|right]",
     );
 
-    opts.optopt("", "power-shutdown", "command to run to shut down the system", "'CMD [ARGS]...'");
-    opts.optopt("", "power-reboot", "command to run to reboot the system", "'CMD [ARGS]...'");
-    opts.optopt("", "power-suspend", "command to run to suspend the system", "'CMD [ARGS]...'");
-    opts.optopt("", "power-hibernate", "command to run to hibernate the system", "'CMD [ARGS]...'");
+    opts.optopt(
+      "",
+      "power-shutdown",
+      "command to run to shut down the system",
+      "'CMD [ARGS]...'",
+    );
+    opts.optopt(
+      "",
+      "power-reboot",
+      "command to run to reboot the system",
+      "'CMD [ARGS]...'",
+    );
+    opts.optopt(
+      "",
+      "power-suspend",
+      "command to run to suspend the system",
+      "'CMD [ARGS]...'",
+    );
+    opts.optopt(
+      "",
+      "power-hibernate",
+      "command to run to hibernate the system",
+      "'CMD [ARGS]...'",
+    );
     opts.optflag("", "power-no-setsid", "do not prefix power commands with setsid");
-    opts.optflag("", "mock", "run without greetd and simulate authentication for visual testing");
+    opts.optflag(
+      "",
+      "mock",
+      "run without greetd and simulate authentication for visual testing",
+    );
 
     opts.optopt("", "kb-command", "F-key to use to open the command menu", "[1-12]");
     opts.optopt("", "kb-sessions", "F-key to use to open the sessions menu", "[1-12]");
@@ -555,8 +659,14 @@ impl Greeter {
     if self.config().opt_present("user-menu") {
       self.user_menu = true;
 
-      let min_uid = self.config().opt_str("user-menu-min-uid").and_then(|uid| uid.parse::<u32>().ok());
-      let max_uid = self.config().opt_str("user-menu-max-uid").and_then(|uid| uid.parse::<u32>().ok());
+      let min_uid = self
+        .config()
+        .opt_str("user-menu-min-uid")
+        .and_then(|uid| uid.parse::<u32>().ok());
+      let max_uid = self
+        .config()
+        .opt_str("user-menu-max-uid")
+        .and_then(|uid| uid.parse::<u32>().ok());
       let (min_uid, max_uid) = get_min_max_uids(min_uid, max_uid);
 
       tracing::info!("min/max UIDs are {}/{}", min_uid, max_uid);
@@ -618,7 +728,9 @@ impl Greeter {
     }
 
     if !self.config().opt_present("no-xsession-wrapper") {
-      self.xsession_wrapper = self.option("xsession-wrapper").or_else(|| Some(DEFAULT_XSESSION_WRAPPER.to_string()));
+      self.xsession_wrapper = self
+        .option("xsession-wrapper")
+        .or_else(|| Some(DEFAULT_XSESSION_WRAPPER.to_string()));
     }
 
     if self.config().opt_present("issue") {
@@ -628,33 +740,57 @@ impl Greeter {
     self.powers.options.push(Power {
       action: PowerOption::Shutdown,
       label: fl!("shutdown"),
-      command: self.config().opt_str("power-shutdown").or_else(|| crate::power::default_command(PowerOption::Shutdown)),
+      command: self
+        .config()
+        .opt_str("power-shutdown")
+        .or_else(|| crate::power::default_command(PowerOption::Shutdown)),
     });
 
     self.powers.options.push(Power {
       action: PowerOption::Reboot,
       label: fl!("reboot"),
-      command: self.config().opt_str("power-reboot").or_else(|| crate::power::default_command(PowerOption::Reboot)),
+      command: self
+        .config()
+        .opt_str("power-reboot")
+        .or_else(|| crate::power::default_command(PowerOption::Reboot)),
     });
 
     self.powers.options.push(Power {
       action: PowerOption::Suspend,
       label: fl!("suspend"),
-      command: self.config().opt_str("power-suspend").or_else(|| crate::power::default_command(PowerOption::Suspend)),
+      command: self
+        .config()
+        .opt_str("power-suspend")
+        .or_else(|| crate::power::default_command(PowerOption::Suspend)),
     });
 
     self.powers.options.push(Power {
       action: PowerOption::Hibernate,
       label: fl!("hibernate"),
-      command: self.config().opt_str("power-hibernate").or_else(|| crate::power::default_command(PowerOption::Hibernate)),
+      command: self
+        .config()
+        .opt_str("power-hibernate")
+        .or_else(|| crate::power::default_command(PowerOption::Hibernate)),
     });
 
     self.power_setsid = !self.config().opt_present("power-no-setsid");
     self.mock = self.config().opt_present("mock");
 
-    self.kb_command = self.config().opt_str("kb-command").map(|i| i.parse::<u8>().unwrap_or_default()).unwrap_or(2);
-    self.kb_sessions = self.config().opt_str("kb-sessions").map(|i| i.parse::<u8>().unwrap_or_default()).unwrap_or(3);
-    self.kb_power = self.config().opt_str("kb-power").map(|i| i.parse::<u8>().unwrap_or_default()).unwrap_or(12);
+    self.kb_command = self
+      .config()
+      .opt_str("kb-command")
+      .map(|i| i.parse::<u8>().unwrap_or_default())
+      .unwrap_or(2);
+    self.kb_sessions = self
+      .config()
+      .opt_str("kb-sessions")
+      .map(|i| i.parse::<u8>().unwrap_or_default())
+      .unwrap_or(3);
+    self.kb_power = self
+      .config()
+      .opt_str("kb-power")
+      .map(|i| i.parse::<u8>().unwrap_or_default())
+      .unwrap_or(12);
 
     if self.kb_command == self.kb_sessions || self.kb_sessions == self.kb_power || self.kb_power == self.kb_command {
       return Err("keybindings must all be distinct".into());
@@ -664,11 +800,19 @@ impl Greeter {
   }
 
   pub fn set_prompt(&mut self, prompt: &str) {
-    self.prompt = if prompt.ends_with(' ') { Some(prompt.into()) } else { Some(format!("{prompt} ")) };
+    self.prompt = if prompt.ends_with(' ') {
+      Some(prompt.into())
+    } else {
+      Some(format!("{prompt} "))
+    };
   }
 
   fn add_session_path(&mut self, path: PathBuf, session_type: SessionType) {
-    if !self.session_paths.iter().any(|(known_path, known_type)| known_path == &path && known_type == &session_type) {
+    if !self
+      .session_paths
+      .iter()
+      .any(|(known_path, known_type)| known_path == &path && known_type == &session_type)
+    {
       self.session_paths.push((path, session_type));
     }
   }
@@ -712,10 +856,16 @@ pub fn print_information<S>(args: &[S]) -> bool
 where
   S: AsRef<OsStr>,
 {
-  if args.iter().any(|arg| matches!(arg.as_ref().to_str(), Some("-h" | "--help"))) {
+  if args
+    .iter()
+    .any(|arg| matches!(arg.as_ref().to_str(), Some("-h" | "--help")))
+  {
     print_usage(Greeter::options());
     true
-  } else if args.iter().any(|arg| matches!(arg.as_ref().to_str(), Some("-v" | "--version"))) {
+  } else if args
+    .iter()
+    .any(|arg| matches!(arg.as_ref().to_str(), Some("-v" | "--version")))
+  {
     print_version();
     true
   } else {
@@ -737,7 +887,7 @@ where
           return Err(Fail::UnrecognizedOption(name));
         };
         args.remove(index);
-      }
+      },
       Err(err) => return Err(err),
     }
   }
@@ -752,7 +902,10 @@ fn option_has_name(arg: &OsStr, name: &str) -> bool {
     return long.split_once('=').map_or(long, |(name, _)| name) == name;
   }
 
-  name.chars().count() == 1 && arg.strip_prefix('-').is_some_and(|shorts| shorts.chars().any(|short| name.starts_with(short)))
+  name.chars().count() == 1
+    && arg
+      .strip_prefix('-')
+      .is_some_and(|shorts| shorts.chars().any(|short| name.starts_with(short)))
 }
 
 fn print_version() {
@@ -770,7 +923,8 @@ mod test {
 
   use super::{mock_sessions, print_information};
   use crate::{
-    Greeter, SecretDisplay,
+    Greeter,
+    SecretDisplay,
     ui::sessions::{SessionSource, SessionType},
   };
 
@@ -814,10 +968,21 @@ mod test {
   async fn test_session_paths_are_deduplicated() {
     let mut greeter = Greeter::default();
 
-    greeter.parse_options(&["--sessions", "/sessions:/sessions", "--xsessions", "/sessions:/sessions"]).await.unwrap();
+    greeter
+      .parse_options(&[
+        "--sessions",
+        "/sessions:/sessions",
+        "--xsessions",
+        "/sessions:/sessions",
+      ])
+      .await
+      .unwrap();
 
     assert_eq!(greeter.session_paths.len(), 2);
-    assert_eq!(greeter.session_paths[0], (PathBuf::from("/sessions"), SessionType::Wayland));
+    assert_eq!(
+      greeter.session_paths[0],
+      (PathBuf::from("/sessions"), SessionType::Wayland)
+    );
     assert_eq!(greeter.session_paths[1], (PathBuf::from("/sessions"), SessionType::X11));
   }
 
@@ -826,7 +991,11 @@ mod test {
     let sessions = mock_sessions();
 
     assert_eq!(sessions.len(), 3);
-    assert!(sessions.iter().all(|session| session.command == "true" && session.path.is_none()));
+    assert!(
+      sessions
+        .iter()
+        .all(|session| session.command == "true" && session.path.is_none())
+    );
   }
 
   #[tokio::test]
@@ -839,7 +1008,14 @@ mod test {
       // Valid combinations
       (&["--cmd", "hello"], true, None),
       (
-        &["--time", "--power-suspend", "systemctl suspend", "--future-option=value", "--cmd", "hello"],
+        &[
+          "--time",
+          "--power-suspend",
+          "systemctl suspend",
+          "--future-option=value",
+          "--cmd",
+          "hello",
+        ],
         true,
         Some(|greeter| {
           assert!(greeter.config().opt_present("time"));
@@ -870,7 +1046,9 @@ mod test {
         ],
         true,
         Some(|greeter| {
-          assert!(matches!(&greeter.session_source, SessionSource::DefaultCommand(cmd, Some(env)) if cmd == "uname" && env.len() == 2));
+          assert!(
+            matches!(&greeter.session_source, SessionSource::DefaultCommand(cmd, Some(env)) if cmd == "uname" && env.len() == 2)
+          );
 
           if let SessionSource::DefaultCommand(_, Some(env)) = &greeter.session_source {
             assert_eq!(env[0], "A=B");
@@ -882,7 +1060,10 @@ mod test {
           assert_eq!(greeter.window_padding(), 1);
           assert_eq!(greeter.container_padding(), 13);
           assert!(greeter.user_menu);
-          assert!(matches!(greeter.xsession_wrapper.as_deref(), Some("startx /usr/bin/env")));
+          assert!(matches!(
+            greeter.xsession_wrapper.as_deref(),
+            Some("startx /usr/bin/env")
+          ));
         }),
       ),
       (
@@ -907,7 +1088,17 @@ mod test {
           assert_eq!(greeter.powers.options[3].command.as_deref(), Some("do-hibernate"));
         }),
       ),
-      (&["--user-menu", "--user-menu-min-uid", "70000", "--user-menu-max-uid", "70000"], true, None),
+      (
+        &[
+          "--user-menu",
+          "--user-menu-min-uid",
+          "70000",
+          "--user-menu-max-uid",
+          "70000",
+        ],
+        true,
+        None,
+      ),
       (&["--mock"], true, Some(|greeter| assert!(greeter.mock))),
       // Unknown options are ignored
       (&["--asterisk-char", ""], true, None),
@@ -927,12 +1118,16 @@ mod test {
 
       match valid {
         true => {
-          assert!(matches!(greeter.parse_options(opts).await, Ok(())), "{:?} cannot be parsed", opts);
+          assert!(
+            matches!(greeter.parse_options(opts).await, Ok(())),
+            "{:?} cannot be parsed",
+            opts
+          );
 
           if let Some(check) = check {
             check(&greeter);
           }
-        }
+        },
         false => assert!(greeter.parse_options(opts).await.is_err()),
       }
     }

@@ -1,9 +1,8 @@
 use crossterm::event::KeyCode;
 use libgreetd_stub::SessionOptions;
 
-use crate::ui::common::masked::MaskedString;
-
 use super::common::IntegrationRunner;
+use crate::ui::common::masked::MaskedString;
 
 #[tokio::test]
 async fn remember_username() {

@@ -17,7 +17,8 @@ use std::{
 
 use chrono::prelude::*;
 use ratatui::{
-  Frame as CrosstermFrame, Terminal,
+  Frame as CrosstermFrame,
+  Terminal,
   layout::{Alignment, Constraint, Direction, Layout},
   style::Modifier,
   text::{Line, Span},
@@ -27,10 +28,9 @@ use sessions::SessionSource;
 use tokio::sync::RwLock;
 use util::buttonize;
 
-use crate::{Greeter, Mode, info::capslock_status, ui::util::should_hide_cursor};
-
 use self::common::style::{Theme, Themed};
 pub use self::i18n::MESSAGES;
+use crate::{Greeter, Mode, info::capslock_status, ui::util::should_hide_cursor};
 
 const TITLEBAR_INDEX: usize = 1;
 const STATUSBAR_INDEX: usize = 3;
@@ -73,7 +73,9 @@ where
 
     if greeter.time {
       let time_text = Span::from(get_time(&greeter));
-      let time = Paragraph::new(time_text).alignment(Alignment::Center).style(theme.of(&[Themed::Time]));
+      let time = Paragraph::new(time_text)
+        .alignment(Alignment::Center)
+        .style(theme.of(&[Themed::Time]));
 
       f.render_widget(time, chunks[TITLEBAR_INDEX]);
     }
@@ -160,7 +162,10 @@ fn status_label<'s, S>(theme: &Theme, text: S) -> Span<'s>
 where
   S: Into<String>,
 {
-  Span::styled(text.into(), theme.of(&[Themed::ActionButton]).add_modifier(Modifier::REVERSED))
+  Span::styled(
+    text.into(),
+    theme.of(&[Themed::ActionButton]).add_modifier(Modifier::REVERSED),
+  )
 }
 
 fn status_value<'s, S>(greeter: &Greeter, theme: &Theme, button: Button, text: S) -> Span<'s>
@@ -174,7 +179,7 @@ where
 
     _ => {
       return Span::from(buttonize(&text.into())).style(theme.of(&[Themed::Action]));
-    }
+    },
   };
 
   let style = match greeter.mode == relevant_mode {

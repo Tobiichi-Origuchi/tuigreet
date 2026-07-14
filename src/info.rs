@@ -54,7 +54,10 @@ pub fn get_issue() -> Option<String> {
   let (date, time) = {
     let now = Local::now();
 
-    (now.format("%a %b %_d %Y").to_string(), now.format("%H:%M:%S").to_string())
+    (
+      now.format("%a %b %_d %Y").to_string(),
+      now.format("%H:%M:%S").to_string(),
+    )
   };
 
   let user_count = match UtmpParser::from_path("/var/run/utmp")
@@ -71,7 +74,10 @@ pub fn get_issue() -> Option<String> {
     n => format!("{n} users"),
   };
 
-  let vtnr: usize = env::var("XDG_VTNR").unwrap_or_else(|_| "0".to_string()).parse().unwrap_or(0);
+  let vtnr: usize = env::var("XDG_VTNR")
+    .unwrap_or_else(|_| "0".to_string())
+    .parse()
+    .unwrap_or(0);
   let uts = utsname::uname();
 
   if let Ok(issue) = fs::read_to_string("/etc/issue") {
@@ -94,7 +100,13 @@ pub fn get_issue() -> Option<String> {
       _ => issue,
     };
 
-    return Some(issue.replace("\\x1b", "\x1b").replace("\\033", "\x1b").replace("\\e", "\x1b").replace(r"\\", r"\"));
+    return Some(
+      issue
+        .replace("\\x1b", "\x1b")
+        .replace("\\033", "\x1b")
+        .replace("\\e", "\x1b")
+        .replace(r"\\", r"\"),
+    );
   }
 
   None
@@ -106,8 +118,12 @@ pub fn get_last_user_username() -> Option<String> {
     Some(username) => {
       let username = username.trim();
 
-      if username.is_empty() { None } else { Some(username.to_string()) }
-    }
+      if username.is_empty() {
+        None
+      } else {
+        Some(username.to_string())
+      }
+    },
   }
 }
 
@@ -118,7 +134,7 @@ pub fn get_last_user_name() -> Option<String> {
       let name = name.trim();
 
       if name.is_empty() { None } else { Some(name.to_string()) }
-    }
+    },
   }
 }
 
@@ -152,18 +168,27 @@ pub fn write_last_command(session: &str) {
 }
 
 pub fn get_last_user_session(username: &str) -> Result<PathBuf, io::Error> {
-  Ok(PathBuf::from(fs::read_to_string(format!("{LAST_SESSION}-{username}"))?.trim()))
+  Ok(PathBuf::from(
+    fs::read_to_string(format!("{LAST_SESSION}-{username}"))?.trim(),
+  ))
 }
 
 pub fn get_last_user_command(username: &str) -> Result<String, io::Error> {
-  Ok(fs::read_to_string(format!("{LAST_COMMAND}-{username}"))?.trim().to_string())
+  Ok(
+    fs::read_to_string(format!("{LAST_COMMAND}-{username}"))?
+      .trim()
+      .to_string(),
+  )
 }
 
 pub fn write_last_user_session<P>(username: &str, session: P)
 where
   P: AsRef<Path>,
 {
-  let _ = fs::write(format!("{LAST_SESSION}-{username}"), session.as_ref().to_string_lossy().as_bytes());
+  let _ = fs::write(
+    format!("{LAST_SESSION}-{username}"),
+    session.as_ref().to_string_lossy().as_bytes(),
+  );
 }
 
 pub fn delete_last_session() {
@@ -202,7 +227,7 @@ pub fn get_users(min_uid: u32, max_uid: u32) -> Vec<User> {
             Some((name, _)) => Some(name.to_string()),
             None => Some(name.to_string()),
           }
-        }
+        },
       },
     })
     .collect();
@@ -238,7 +263,7 @@ pub fn get_min_max_uids(min_uid: Option<u32>, max_uid: Option<u32>) -> (u32, u32
       });
 
       uids
-    }
+    },
   }
 }
 
@@ -255,7 +280,12 @@ pub fn get_sessions(greeter: &Greeter) -> Result<Vec<Session>, Box<dyn Error>> {
     tracing::info!("reading {:?} sessions from '{}'", session_type, path.display());
 
     if let Ok(entries) = fs::read_dir(path) {
-      files.extend(entries.flat_map(|entry| entry.map(|entry| load_desktop_file(entry.path(), *session_type))).flatten().flatten());
+      files.extend(
+        entries
+          .flat_map(|entry| entry.map(|entry| load_desktop_file(entry.path(), *session_type)))
+          .flatten()
+          .flatten(),
+      );
     }
   }
 
@@ -271,7 +301,9 @@ where
   P: AsRef<Path>,
 {
   let desktop = Ini::load_from_file(path.as_ref())?;
-  let section = desktop.section(Some("Desktop Entry")).ok_or("no Desktop Entry section in desktop file")?;
+  let section = desktop
+    .section(Some("Desktop Entry"))
+    .ok_or("no Desktop Entry section in desktop file")?;
 
   if let Some("true") = section.get("Hidden") {
     tracing::info!("ignoring session in '{}': Hidden=true", path.as_ref().display());

@@ -7,13 +7,15 @@ use ratatui::{
   widgets::{Block, BorderType, Borders, Paragraph},
 };
 
+use super::common::style::Themed;
 use crate::{
-  GreetAlign, Greeter, Mode, SecretDisplay,
+  GreetAlign,
+  Greeter,
+  Mode,
+  SecretDisplay,
   info::get_hostname,
   ui::{Frame, prompt_value, util::*},
 };
-
-use super::common::style::Themed;
 
 const GREETING_INDEX: usize = 0;
 const USERNAME_INDEX: usize = 1;
@@ -34,7 +36,12 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
   };
 
   let container = Rect::new(x, y, width, height);
-  let frame = Rect::new(x + container_padding, y + container_padding, width - (2 * container_padding), height - (2 * container_padding));
+  let frame = Rect::new(
+    x + container_padding,
+    y + container_padding,
+    width - (2 * container_padding),
+    height - (2 * container_padding),
+  );
 
   let hostname = Span::from(titleize(&fl!("title_authenticate", hostname = get_hostname())));
   let block = Block::default()
@@ -53,13 +60,16 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
   let should_display_answer = greeter.mode == Mode::Password;
 
   let constraints = [
-    Constraint::Length(greeting_height),                                        // Greeting
-    Constraint::Length(1),                                                      // Username
+    Constraint::Length(greeting_height), // Greeting
+    Constraint::Length(1),               // Username
     Constraint::Length(if should_display_answer { prompt_padding } else { 0 }), // Prompt padding
-    Constraint::Length(if should_display_answer { 1 } else { 0 }),              // Answer
+    Constraint::Length(if should_display_answer { 1 } else { 0 }), // Answer
   ];
 
-  let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints.as_ref()).split(frame);
+  let chunks = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints(constraints.as_ref())
+    .split(frame);
   let cursor = chunks[USERNAME_INDEX];
 
   if let Some(greeting) = greeting {
@@ -98,7 +108,11 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
         );
       }
 
-      let answer_text = if greeter.working { Span::from(fl!("wait")) } else { prompt_value(theme, greeter.prompt.as_ref()) };
+      let answer_text = if greeter.working {
+        Span::from(fl!("wait"))
+      } else {
+        prompt_value(theme, greeter.prompt.as_ref())
+      };
 
       let answer_label = Paragraph::new(answer_text);
 
@@ -113,9 +127,13 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
               } else {
                 let mut rng = StdRng::seed_from_u64(0);
 
-                greeter.buffer.chars().map(|_| pool.chars().nth(rng.gen_range(0..pool.chars().count())).unwrap()).collect()
+                greeter
+                  .buffer
+                  .chars()
+                  .map(|_| pool.chars().nth(rng.gen_range(0..pool.chars().count())).unwrap())
+                  .collect()
               }
-            }
+            },
 
             _ => greeter.buffer.clone(),
           };
@@ -140,9 +158,9 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
 
         f.render_widget(message, Rect::new(x, y + height, width, message_height));
       }
-    }
+    },
 
-    _ => {}
+    _ => {},
   }
 
   match greeter.mode {
@@ -150,19 +168,28 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
       let username_length = greeter.username.get().chars().count();
       let offset = get_cursor_offset(greeter, username_length);
 
-      Ok((2 + cursor.x + fl!("username").chars().count() as u16 + offset as u16, USERNAME_INDEX as u16 + cursor.y))
-    }
+      Ok((
+        2 + cursor.x + fl!("username").chars().count() as u16 + offset as u16,
+        USERNAME_INDEX as u16 + cursor.y,
+      ))
+    },
 
     Mode::Password => {
       let answer_length = greeter.buffer.chars().count();
       let offset = get_cursor_offset(greeter, answer_length);
 
       if greeter.asking_for_secret && !greeter.secret_display.show() {
-        Ok((1 + cursor.x + greeter.prompt_width() as u16, ANSWER_INDEX as u16 + prompt_padding + cursor.y - 1))
+        Ok((
+          1 + cursor.x + greeter.prompt_width() as u16,
+          ANSWER_INDEX as u16 + prompt_padding + cursor.y - 1,
+        ))
       } else {
-        Ok((1 + cursor.x + greeter.prompt_width() as u16 + offset as u16, ANSWER_INDEX as u16 + prompt_padding + cursor.y - 1))
+        Ok((
+          1 + cursor.x + greeter.prompt_width() as u16 + offset as u16,
+          ANSWER_INDEX as u16 + prompt_padding + cursor.y - 1,
+        ))
       }
-    }
+    },
 
     _ => Ok((1, 1)),
   }

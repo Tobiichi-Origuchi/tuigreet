@@ -12,5 +12,7 @@ fn main() {
 }
 
 fn get_git_version() -> Result<String, Box<dyn Error>> {
-  Ok(String::from_utf8(Command::new("./contrib/git-version.sh").output()?.stdout)?)
+  Ok(String::from_utf8(
+    Command::new("./contrib/git-version.sh").output()?.stdout,
+  )?)
 }

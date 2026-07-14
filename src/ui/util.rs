@@ -67,11 +67,27 @@ pub fn get_rect_bounds(greeter: &Greeter, area: Rect, items: usize) -> (u16, u16
   let width = greeter.width();
   let height: u16 = get_height(greeter) + items as u16;
 
-  let x = if width < area.width { (area.width - width) / 2 } else { 0 };
-  let y = if height < area.height { (area.height - height) / 2 } else { 0 };
+  let x = if width < area.width {
+    (area.width - width) / 2
+  } else {
+    0
+  };
+  let y = if height < area.height {
+    (area.height - height) / 2
+  } else {
+    0
+  };
 
-  let (x, width) = if (x + width) >= area.width { (0, area.width) } else { (x, width) };
-  let (y, height) = if (y + height) >= area.height { (0, area.height) } else { (y, height) };
+  let (x, width) = if (x + width) >= area.width {
+    (0, area.width)
+  } else {
+    (x, width)
+  };
+  let (y, height) = if (y + height) >= area.height {
+    (0, area.height)
+  } else {
+    (y, height)
+  };
 
   (x, y, width, height)
 }
@@ -144,12 +160,12 @@ mod test {
     widgets::{Paragraph, Wrap},
   };
 
+  use super::{get_input_width, get_rect_bounds};
   use crate::{
-    Greeter, Mode,
+    Greeter,
+    Mode,
     ui::util::{get_greeting_height, get_height},
   };
-
-  use super::{get_input_width, get_rect_bounds};
 
   // +-----------+
   // | Username: |
@@ -225,7 +241,9 @@ mod test {
   #[test]
   fn test_container_height_password_greeting_padding_one_prompt_padding_0() {
     let mut greeter = Greeter::default();
-    greeter.config = Greeter::options().parse(&["--container-padding", "1", "--prompt-padding", "0"]).ok();
+    greeter.config = Greeter::options()
+      .parse(&["--container-padding", "1", "--prompt-padding", "0"])
+      .ok();
     greeter.greeting = Some("Hello".into());
     greeter.mode = Mode::Password;
     greeter.prompt = Some("Password:".into());
@@ -253,7 +271,9 @@ mod test {
   #[test]
   fn input_width() {
     let mut greeter = Greeter::default();
-    greeter.config = Greeter::options().parse(&["--width", "40", "--container-padding", "1"]).ok();
+    greeter.config = Greeter::options()
+      .parse(&["--width", "40", "--container-padding", "1"])
+      .ok();
 
     let input_width = get_input_width(&greeter, 40, &Some("Username:".into()));
 
@@ -263,7 +283,9 @@ mod test {
   #[test]
   fn greeting_height_one_line() {
     let mut greeter = Greeter::default();
-    greeter.config = Greeter::options().parse(&["--width", "15", "--container-padding", "1"]).ok();
+    greeter.config = Greeter::options()
+      .parse(&["--width", "15", "--container-padding", "1"])
+      .ok();
     greeter.greeting = Some("Hello World".into());
 
     let (_, height) = get_greeting_height(&greeter, 1, 0);
@@ -274,7 +296,9 @@ mod test {
   #[test]
   fn greeting_height_two_lines() {
     let mut greeter = Greeter::default();
-    greeter.config = Greeter::options().parse(&["--width", "8", "--container-padding", "1"]).ok();
+    greeter.config = Greeter::options()
+      .parse(&["--width", "8", "--container-padding", "1"])
+      .ok();
     greeter.greeting = Some("Hello World".into());
 
     let (_, height) = get_greeting_height(&greeter, 1, 0);
@@ -285,7 +309,9 @@ mod test {
   #[test]
   fn ansi_greeting_height_one_line() {
     let mut greeter = Greeter::default();
-    greeter.config = Greeter::options().parse(&["--width", "15", "--container-padding", "1"]).ok();
+    greeter.config = Greeter::options()
+      .parse(&["--width", "15", "--container-padding", "1"])
+      .ok();
     greeter.greeting = Some("\x1b[31mHello\x1b[0m World".into());
 
     let (text, height) = get_greeting_height(&greeter, 1, 0);
@@ -303,7 +329,9 @@ mod test {
   #[test]
   fn ansi_greeting_height_two_lines() {
     let mut greeter = Greeter::default();
-    greeter.config = Greeter::options().parse(&["--width", "8", "--container-padding", "1"]).ok();
+    greeter.config = Greeter::options()
+      .parse(&["--width", "8", "--container-padding", "1"])
+      .ok();
     greeter.greeting = Some("\x1b[31mHello\x1b[0m World".into());
 
     let (text, height) = get_greeting_height(&greeter, 1, 0);
@@ -321,12 +349,15 @@ mod test {
   #[test]
   fn greeting_preserves_whitespace() {
     let mut greeter = Greeter::default();
-    greeter.config = Greeter::options().parse(&["--width", "30", "--container-padding", "1"]).ok();
+    greeter.config = Greeter::options()
+      .parse(&["--width", "30", "--container-padding", "1"])
+      .ok();
     greeter.greeting = Some("  Hello     \nWorld    ".into());
 
     let (text, height) = get_greeting_height(&greeter, 1, 0);
 
-    let expected = Paragraph::new(Text::from(vec![Line::from("  Hello     "), Line::from("World    ")])).wrap(Wrap { trim: false });
+    let expected =
+      Paragraph::new(Text::from(vec![Line::from("  Hello     "), Line::from("World    ")])).wrap(Wrap { trim: false });
 
     assert_eq!(text, Some(expected));
     assert_eq!(height, 3);

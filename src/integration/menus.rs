@@ -1,12 +1,11 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 use libgreetd_stub::SessionOptions;
 
+use super::common::IntegrationRunner;
 use crate::{
   power::PowerOption,
   ui::{common::menu::Menu, power::Power, sessions::Session, users::User},
 };
-
-use super::common::IntegrationRunner;
 
 #[tokio::test]
 async fn menus_labels_default() {
@@ -92,7 +91,9 @@ async fn change_command() {
       assert!(runner.output().await.contains("Change session command"));
       assert!(runner.output().await.contains("New command: uname"));
 
-      runner.send_modified_key(KeyCode::Char('u'), KeyModifiers::CONTROL).await;
+      runner
+        .send_modified_key(KeyCode::Char('u'), KeyModifiers::CONTROL)
+        .await;
       runner.send_text("mynewcommand").await;
       runner.send_key(KeyCode::Enter).await;
       runner.wait_for_render().await;

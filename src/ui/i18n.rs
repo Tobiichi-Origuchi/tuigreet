@@ -1,5 +1,6 @@
 use i18n_embed::{
-  DesktopLanguageRequester, LanguageLoader,
+  DesktopLanguageRequester,
+  LanguageLoader,
   fluent::{FluentLanguageLoader, fluent_language_loader},
 };
 use lazy_static::lazy_static;

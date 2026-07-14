@@ -21,13 +21,21 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
 
   let container = Rect::new(x, y, width, height);
   let container_padding = greeter.container_padding();
-  let frame = Rect::new(x + container_padding, y + container_padding, width - (2 * container_padding), height - (2 * container_padding));
+  let frame = Rect::new(
+    x + container_padding,
+    y + container_padding,
+    width - (2 * container_padding),
+    height - (2 * container_padding),
+  );
 
   let block = Block::default().borders(Borders::ALL).border_type(BorderType::Plain);
 
   let constraints = [Constraint::Length(1)];
 
-  let chunks = Layout::default().direction(Direction::Vertical).constraints(constraints.as_ref()).split(frame);
+  let chunks = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints(constraints.as_ref())
+    .split(frame);
   let text = Span::from(fl!("wait"));
   let paragraph = Paragraph::new(text).alignment(Alignment::Center);
 

@@ -17,6 +17,8 @@ mod integration;
 
 use std::{env, error::Error, fs::OpenOptions, io, process, sync::Arc};
 
+#[cfg(not(test))]
+use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, enable_raw_mode};
 use crossterm::{
   execute,
   terminal::{LeaveAlternateScreen, disable_raw_mode},
@@ -27,9 +29,6 @@ use power::PowerPostAction;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::sync::RwLock;
 use tracing_appender::non_blocking::WorkerGuard;
-
-#[cfg(not(test))]
-use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, enable_raw_mode};
 
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
@@ -111,7 +110,7 @@ where
 
       Some(Event::Exit(status)) => {
         crate::exit(&mut *greeter.write().await, status).await;
-      }
+      },
 
       Some(Event::PowerCommand(command)) => {
         if let PowerPostAction::ClearScreen = power::run(&greeter, command).await {
@@ -122,9 +121,9 @@ where
 
           break;
         }
-      }
+      },
 
-      _ => {}
+      _ => {},
     }
   }
 
@@ -135,7 +134,7 @@ async fn exit(greeter: &mut Greeter, status: AuthStatus) {
   tracing::info!("preparing exit with status {}", status);
 
   match status {
-    AuthStatus::Success => {}
+    AuthStatus::Success => {},
     AuthStatus::Cancel | AuthStatus::Failure => Ipc::cancel(greeter).await,
   }
 
@@ -186,12 +185,16 @@ fn init_logger(greeter: &Greeter) -> Option<WorkerGuard> {
       let target = Targets::new().with_target("tuigreet", LevelFilter::DEBUG);
 
       tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_writer(appender).with_line_number(true))
+        .with(
+          tracing_subscriber::fmt::layer()
+            .with_writer(appender)
+            .with_line_number(true),
+        )
         .with(target)
         .init();
 
       Some(guard)
-    }
+    },
 
     _ => None,
   }

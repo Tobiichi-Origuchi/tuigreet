@@ -29,16 +29,22 @@ async fn keyboard_movement() {
       runner.send_key(KeyCode::Char('l')).await;
       runner.send_key(KeyCode::Right).await;
       runner.send_key(KeyCode::Char('r')).await;
-      runner.send_modified_key(KeyCode::Char('a'), KeyModifiers::CONTROL).await;
+      runner
+        .send_modified_key(KeyCode::Char('a'), KeyModifiers::CONTROL)
+        .await;
       runner.send_key(KeyCode::Char('a')).await;
-      runner.send_modified_key(KeyCode::Char('e'), KeyModifiers::CONTROL).await;
+      runner
+        .send_modified_key(KeyCode::Char('e'), KeyModifiers::CONTROL)
+        .await;
       runner.send_key(KeyCode::Char('e')).await;
       runner.wait_for_render().await;
 
       assert!(runner.output().await.contains("Username: aapognlure"));
 
       runner.send_key(KeyCode::Left).await;
-      runner.send_modified_key(KeyCode::Char('u'), KeyModifiers::CONTROL).await;
+      runner
+        .send_modified_key(KeyCode::Char('u'), KeyModifiers::CONTROL)
+        .await;
       runner.wait_for_render().await;
 
       assert!(runner.output().await.contains("Username:      "));

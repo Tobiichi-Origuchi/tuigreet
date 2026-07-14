@@ -36,14 +36,13 @@ use std::{
   sync::{Arc, Mutex},
 };
 
-use tokio::sync::mpsc;
-use unicode_width::UnicodeWidthStr;
-
 use ratatui::{
   backend::{Backend, ClearType, WindowSize},
   buffer::{Buffer, Cell},
   layout::{Position, Rect, Size},
 };
+use tokio::sync::mpsc;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone)]
 pub struct TestBackend {
@@ -152,21 +151,21 @@ impl Backend for TestBackend {
       ClearType::AfterCursor => {
         let index = buffer.index_of(self.pos.0, self.pos.1) + 1;
         buffer.content[index..].fill(Cell::default());
-      }
+      },
       ClearType::BeforeCursor => {
         let index = buffer.index_of(self.pos.0, self.pos.1);
         buffer.content[..index].fill(Cell::default());
-      }
+      },
       ClearType::CurrentLine => {
         let line_start_index = buffer.index_of(0, self.pos.1);
         let line_end_index = buffer.index_of(self.width - 1, self.pos.1);
         buffer.content[line_start_index..=line_end_index].fill(Cell::default());
-      }
+      },
       ClearType::UntilNewLine => {
         let index = buffer.index_of(self.pos.0, self.pos.1);
         let line_end_index = buffer.index_of(self.width - 1, self.pos.1);
         buffer.content[index..=line_end_index].fill(Cell::default());
-      }
+      },
     }
     Ok(())
   }
@@ -187,7 +186,12 @@ impl Backend for TestBackend {
 
       self.set_cursor_position((0, rotate_by))?;
       self.clear_region(ClearType::BeforeCursor)?;
-      self.buffer.lock().unwrap().content.rotate_left((self.width * rotate_by).into());
+      self
+        .buffer
+        .lock()
+        .unwrap()
+        .content
+        .rotate_left((self.width * rotate_by).into());
     }
 
     let new_cursor_y = cur_y.saturating_add(n).min(max_y);
@@ -201,7 +205,10 @@ impl Backend for TestBackend {
   }
 
   fn window_size(&mut self) -> io::Result<WindowSize> {
-    static WINDOW_PIXEL_SIZE: Size = Size { width: 640, height: 480 };
+    static WINDOW_PIXEL_SIZE: Size = Size {
+      width: 640,
+      height: 480,
+    };
     Ok(WindowSize {
       columns_rows: (self.width, self.height).into(),
       pixels: WINDOW_PIXEL_SIZE,

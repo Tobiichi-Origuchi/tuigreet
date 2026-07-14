@@ -57,7 +57,7 @@ fn default_command_for(option: PowerOption, root: &Path) -> Option<String> {
         Some(LoginManager::Elogind) => Some(format!("loginctl {action}")),
         None => None,
       }
-    }
+    },
   }
 }
 
@@ -72,13 +72,15 @@ pub async fn power(greeter: &mut Greeter, option: PowerOption) {
   let command = match greeter.powers.options.iter().find(|opt| opt.action == option) {
     None => None,
 
-    Some(Power { command: Some(args), .. }) => {
+    Some(Power {
+      command: Some(args), ..
+    }) => {
       let command = match greeter.power_setsid {
         true => {
           let mut command = Command::new("setsid");
           command.args(args.split(' '));
           command
-        }
+        },
 
         false => {
           let mut args = args.split(' ');
@@ -86,11 +88,11 @@ pub async fn power(greeter: &mut Greeter, option: PowerOption) {
           let mut command = Command::new(args.next().unwrap_or_default());
           command.args(args);
           command
-        }
+        },
       };
 
       Some(command)
-    }
+    },
 
     Some(_) => None,
   };
@@ -126,7 +128,7 @@ pub async fn run(greeter: &Arc<RwLock<Greeter>>, mut command: Command) -> PowerP
         let output = String::from_utf8(output).unwrap_or_default();
 
         Some(format!("{status}\n{output}"))
-      }
+      },
     },
 
     Err(err) => Some(format!("{}: {err}", fl!("command_failed"))),
@@ -165,8 +167,14 @@ mod tests {
     fs::write(root.path().join("proc/42/comm"), "elogind-daemon\n").unwrap();
 
     assert_eq!(login_manager(root.path()), Some(LoginManager::Elogind));
-    assert_eq!(default_command_for(PowerOption::Suspend, root.path()).as_deref(), Some("loginctl suspend"));
-    assert_eq!(default_command_for(PowerOption::Hibernate, root.path()).as_deref(), Some("loginctl hibernate"));
+    assert_eq!(
+      default_command_for(PowerOption::Suspend, root.path()).as_deref(),
+      Some("loginctl suspend")
+    );
+    assert_eq!(
+      default_command_for(PowerOption::Hibernate, root.path()).as_deref(),
+      Some("loginctl hibernate")
+    );
   }
 
   #[test]
@@ -175,8 +183,14 @@ mod tests {
     fs::create_dir_all(root.path().join("run/systemd/system")).unwrap();
 
     assert_eq!(login_manager(root.path()), Some(LoginManager::Systemd));
-    assert_eq!(default_command_for(PowerOption::Suspend, root.path()).as_deref(), Some("systemctl suspend"));
-    assert_eq!(default_command_for(PowerOption::Hibernate, root.path()).as_deref(), Some("systemctl hibernate"));
+    assert_eq!(
+      default_command_for(PowerOption::Suspend, root.path()).as_deref(),
+      Some("systemctl suspend")
+    );
+    assert_eq!(
+      default_command_for(PowerOption::Hibernate, root.path()).as_deref(),
+      Some("systemctl hibernate")
+    );
   }
 
   #[test]

@@ -7,6 +7,7 @@ use ratatui::{
   widgets::{Block, BorderType, Borders, Paragraph},
 };
 
+use super::style::Themed;
 use crate::{
   Greeter,
   ui::{
@@ -14,8 +15,6 @@ use crate::{
     util::{get_rect_bounds, titleize},
   },
 };
-
-use super::style::Themed;
 
 pub trait MenuItem {
   fn format(&self) -> Cow<'_, str>;

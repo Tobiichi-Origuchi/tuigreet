@@ -55,7 +55,7 @@ impl Theme {
           "input" => style.input = Some((Fg, color)),
           "action" => style.action = Some((Fg, color)),
           "button" => style.button = Some((Fg, color)),
-          _ => {}
+          _ => {},
         }
       }
     }
@@ -77,7 +77,9 @@ impl Theme {
   }
 
   pub fn of(&self, targets: &[Themed]) -> Style {
-    targets.iter().fold(Style::default(), |style, target| self.apply(style, target))
+    targets
+      .iter()
+      .fold(Style::default(), |style, target| self.apply(style, target))
   }
 
   fn apply(&self, style: Style, target: &Themed) -> Style {

@@ -5,8 +5,16 @@ use greetd_ipc::Request;
 use tokio::sync::RwLock;
 
 use crate::{
-  Greeter, Mode,
-  info::{delete_last_command, delete_last_session, get_last_user_command, get_last_user_session, write_last_command, write_last_session_path},
+  Greeter,
+  Mode,
+  info::{
+    delete_last_command,
+    delete_last_session,
+    get_last_user_command,
+    get_last_user_session,
+    write_last_command,
+    write_last_session_path,
+  },
   ipc::Ipc,
   power::power,
   ui::{
@@ -39,7 +47,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
       Mode::Username => greeter.username = MaskedString::default(),
       Mode::Password => greeter.buffer = String::new(),
       Mode::Command => greeter.buffer = String::new(),
-      _ => {}
+      _ => {},
     },
 
     // In debug mode only, ^X will exit the application.
@@ -54,7 +62,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
       if let Some(ref sender) = greeter.events {
         let _ = sender.send(Event::Exit(AuthStatus::Cancel)).await;
       }
-    }
+    },
 
     // Depending on the active screen, pressing Escape will either return to the
     // previous mode (close a popup, for example), or cancel the `greetd`
@@ -64,26 +72,32 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
         greeter.mode = greeter.previous_mode;
         greeter.buffer = greeter.previous_buffer.take().unwrap_or_default();
         greeter.cursor_offset = 0;
-      }
+      },
 
       Mode::Users | Mode::Sessions | Mode::Power => {
         greeter.mode = greeter.previous_mode;
-      }
+      },
 
       _ => {
         Ipc::cancel(&mut greeter).await;
         greeter.reset(false).await;
-      }
+      },
     },
 
     // Simple cursor directions in text fields.
-    KeyEvent { code: KeyCode::Left, .. } => greeter.cursor_offset -= 1,
-    KeyEvent { code: KeyCode::Right, .. } => greeter.cursor_offset += 1,
+    KeyEvent {
+      code: KeyCode::Left, ..
+    } => greeter.cursor_offset -= 1,
+    KeyEvent {
+      code: KeyCode::Right, ..
+    } => greeter.cursor_offset += 1,
 
     // F2 will display the command entry prompt. If we are already in one of the
     // popup screens, we set the previous screen as being the current previous
     // screen.
-    KeyEvent { code: KeyCode::F(i), .. } if i == greeter.kb_command => {
+    KeyEvent {
+      code: KeyCode::F(i), ..
+    } if i == greeter.kb_command => {
       greeter.previous_mode = match greeter.mode {
         Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => greeter.previous_mode,
         _ => greeter.mode,
@@ -91,34 +105,42 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
 
       // Set the edition buffer to the current command.
       greeter.previous_buffer = Some(greeter.buffer.clone());
-      greeter.buffer = greeter.session_source.command(&greeter).map(str::to_string).unwrap_or_default();
+      greeter.buffer = greeter
+        .session_source
+        .command(&greeter)
+        .map(str::to_string)
+        .unwrap_or_default();
       greeter.cursor_offset = 0;
       greeter.mode = Mode::Command;
-    }
+    },
 
     // F3 will display the session selection menu. If we are already in one of
     // the popup screens, we set the previous screen as being the current
     // previous screen.
-    KeyEvent { code: KeyCode::F(i), .. } if i == greeter.kb_sessions && !greeter.sessions.options.is_empty() => {
+    KeyEvent {
+      code: KeyCode::F(i), ..
+    } if i == greeter.kb_sessions && !greeter.sessions.options.is_empty() => {
       greeter.previous_mode = match greeter.mode {
         Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => greeter.previous_mode,
         _ => greeter.mode,
       };
 
       greeter.mode = Mode::Sessions;
-    }
+    },
 
     // F12 will display the user selection menu. If we are already in one of the
     // popup screens, we set the previous screen as being the current previous
     // screen.
-    KeyEvent { code: KeyCode::F(i), .. } if i == greeter.kb_power && !greeter.powers.options.is_empty() => {
+    KeyEvent {
+      code: KeyCode::F(i), ..
+    } if i == greeter.kb_power && !greeter.powers.options.is_empty() => {
       greeter.previous_mode = match greeter.mode {
         Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => greeter.previous_mode,
         _ => greeter.mode,
       };
 
       greeter.mode = Mode::Power;
-    }
+    },
 
     // Handle moving up in menus.
     KeyEvent { code: KeyCode::Up, .. } => {
@@ -139,10 +161,12 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
       {
         greeter.powers.selected -= 1;
       }
-    }
+    },
 
     // Handle moving down in menus.
-    KeyEvent { code: KeyCode::Down, .. } => {
+    KeyEvent {
+      code: KeyCode::Down, ..
+    } => {
       if let Mode::Users = greeter.mode
         && greeter.users.selected + 1 < greeter.users.options.len()
       {
@@ -160,7 +184,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
       {
         greeter.powers.selected += 1;
       }
-    }
+    },
 
     // ^A should go to the start of the current prompt
     KeyEvent {
@@ -176,7 +200,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
       };
 
       greeter.cursor_offset = -(value.chars().count() as i16);
-    }
+    },
 
     // ^A should go to the end of the current prompt
     KeyEvent {
@@ -188,11 +212,13 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
     // Tab should validate the username entry (same as Enter).
     KeyEvent { code: KeyCode::Tab, .. } => match greeter.mode {
       Mode::Username if !greeter.username.value.is_empty() => validate_username(&mut greeter, &ipc).await,
-      _ => {}
+      _ => {},
     },
 
     // Enter validates the current entry, depending on the active mode.
-    KeyEvent { code: KeyCode::Enter, .. } => match greeter.mode {
+    KeyEvent {
+      code: KeyCode::Enter, ..
+    } => match greeter.mode {
       Mode::Username if !greeter.username.value.is_empty() => validate_username(&mut greeter, &ipc).await,
 
       Mode::Username if greeter.user_menu && !greeter.users.options.is_empty() => {
@@ -203,9 +229,9 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
 
         greeter.buffer = greeter.previous_buffer.take().unwrap_or_default();
         greeter.mode = Mode::Users;
-      }
+      },
 
-      Mode::Username => {}
+      Mode::Username => {},
 
       Mode::Password => {
         greeter.working = true;
@@ -218,7 +244,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
           .await;
 
         greeter.buffer = String::new();
-      }
+      },
 
       Mode::Command => {
         greeter.sessions.selected = 0;
@@ -231,7 +257,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
 
         greeter.buffer = greeter.previous_buffer.take().unwrap_or_default();
         greeter.mode = greeter.previous_mode;
-      }
+      },
 
       Mode::Users => {
         let username = greeter.users.options.get(greeter.users.selected).cloned();
@@ -243,7 +269,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
         greeter.mode = greeter.previous_mode;
 
         validate_username(&mut greeter, &ipc).await;
-      }
+      },
 
       Mode::Sessions => {
         let session = greeter.sessions.options.get(greeter.sessions.selected).cloned();
@@ -260,7 +286,7 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
         }
 
         greeter.mode = greeter.previous_mode;
-      }
+      },
 
       Mode::Power => {
         let power_command = greeter.powers.options.get(greeter.powers.selected).cloned();
@@ -270,21 +296,32 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
         }
 
         greeter.mode = greeter.previous_mode;
-      }
+      },
 
-      _ => {}
+      _ => {},
     },
 
     // Do not handle any other controls keybindings
-    KeyEvent { modifiers: KeyModifiers::CONTROL, .. } => {}
+    KeyEvent {
+      modifiers: KeyModifiers::CONTROL,
+      ..
+    } => {},
 
     // Handle free-form entry of characters.
-    KeyEvent { code: KeyCode::Char(c), .. } => insert_key(&mut greeter, c).await,
+    KeyEvent {
+      code: KeyCode::Char(c), ..
+    } => insert_key(&mut greeter, c).await,
 
     // Handle deletion of characters.
-    KeyEvent { code: KeyCode::Backspace, .. } | KeyEvent { code: KeyCode::Delete, .. } => delete_key(&mut greeter, input.code).await,
+    KeyEvent {
+      code: KeyCode::Backspace,
+      ..
+    }
+    | KeyEvent {
+      code: KeyCode::Delete, ..
+    } => delete_key(&mut greeter, input.code).await,
 
-    _ => {}
+    _ => {},
   }
 
   Ok(())
@@ -311,7 +348,7 @@ async fn insert_key(greeter: &mut Greeter, c: char) {
     Mode::Username => greeter.username.value = value,
     Mode::Password => greeter.buffer = value,
     Mode::Command => greeter.buffer = value,
-    _ => {}
+    _ => {},
   };
 }
 
@@ -369,7 +406,12 @@ async fn validate_username(greeter: &mut Greeter, ipc: &Ipc) {
     {
       tracing::info!("remembered user session is {}", last_session.name);
 
-      greeter.sessions.selected = greeter.sessions.options.iter().position(|sess| sess.path == last_session.path).unwrap_or(0);
+      greeter.sessions.selected = greeter
+        .sessions
+        .options
+        .iter()
+        .position(|sess| sess.path == last_session.path)
+        .unwrap_or(0);
       greeter.session_source = SessionSource::Session(greeter.sessions.selected);
     }
 
@@ -390,7 +432,8 @@ mod test {
 
   use super::handle;
   use crate::{
-    Greeter, Mode,
+    Greeter,
+    Mode,
     ipc::Ipc,
     power::PowerOption,
     ui::{
@@ -410,7 +453,12 @@ mod test {
       greeter.username = MaskedString::from("apognu".to_string(), None);
     }
 
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL), Ipc::new()).await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+      Ipc::new(),
+    )
+    .await;
 
     {
       let status = greeter.read().await;
@@ -425,7 +473,12 @@ mod test {
       greeter.buffer = "password".to_string();
     }
 
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL), Ipc::new()).await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+      Ipc::new(),
+    )
+    .await;
 
     {
       let status = greeter.read().await;
@@ -440,7 +493,12 @@ mod test {
       greeter.buffer = "newcommand".to_string();
     }
 
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL), Ipc::new()).await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+      Ipc::new(),
+    )
+    .await;
 
     {
       let status = greeter.read().await;
@@ -463,7 +521,12 @@ mod test {
       greeter.cursor_offset = 2;
     }
 
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()), Ipc::new()).await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await;
 
     {
       let status = greeter.read().await;
@@ -482,7 +545,12 @@ mod test {
         greeter.mode = mode;
       }
 
-      let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()), Ipc::new()).await;
+      let result = handle(
+        greeter.clone(),
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+        Ipc::new(),
+      )
+      .await;
 
       {
         let status = greeter.read().await;
@@ -497,7 +565,12 @@ mod test {
   async fn left_right() {
     let greeter = Arc::new(RwLock::new(Greeter::default()));
 
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Left, KeyModifiers::empty()), Ipc::new()).await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Left, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await;
 
     {
       let status = greeter.read().await;
@@ -506,8 +579,18 @@ mod test {
       assert_eq!(status.cursor_offset, -1);
     }
 
-    let _ = handle(greeter.clone(), KeyEvent::new(KeyCode::Right, KeyModifiers::empty()), Ipc::new()).await;
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Right, KeyModifiers::empty()), Ipc::new()).await;
+    let _ = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Right, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Right, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await;
 
     {
       let status = greeter.read().await;
@@ -528,7 +611,12 @@ mod test {
       greeter.session_source = SessionSource::Command("thecommand".to_string());
     }
 
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::F(2), KeyModifiers::empty()), Ipc::new()).await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::F(2), KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await;
 
     {
       let status = greeter.read().await;
@@ -546,7 +634,12 @@ mod test {
         greeter.mode = mode;
       }
 
-      let result = handle(greeter.clone(), KeyEvent::new(KeyCode::F(2), KeyModifiers::empty()), Ipc::new()).await;
+      let result = handle(
+        greeter.clone(),
+        KeyEvent::new(KeyCode::F(2), KeyModifiers::empty()),
+        Ipc::new(),
+      )
+      .await;
 
       {
         let status = greeter.read().await;
@@ -595,7 +688,12 @@ mod test {
           greeter.mode = mode;
         }
 
-        let result = handle(greeter.clone(), KeyEvent::new(KeyCode::F(2), KeyModifiers::empty()), Ipc::new()).await;
+        let result = handle(
+          greeter.clone(),
+          KeyEvent::new(KeyCode::F(2), KeyModifiers::empty()),
+          Ipc::new(),
+        )
+        .await;
 
         {
           let status = greeter.read().await;
@@ -648,7 +746,12 @@ mod test {
           greeter.mode = mode;
         }
 
-        let result = handle(greeter.clone(), KeyEvent::new(KeyCode::F(3), KeyModifiers::empty()), Ipc::new()).await;
+        let result = handle(
+          greeter.clone(),
+          KeyEvent::new(KeyCode::F(3), KeyModifiers::empty()),
+          Ipc::new(),
+        )
+        .await;
 
         {
           let status = greeter.read().await;
@@ -665,13 +768,23 @@ mod test {
   async fn empty_menu_does_not_open_or_panic() {
     let greeter = Arc::new(RwLock::new(Greeter::default()));
 
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::F(3), KeyModifiers::empty()), Ipc::new()).await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::F(3), KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await;
     assert!(result.is_ok());
     assert_eq!(greeter.read().await.mode, Mode::Username);
 
     greeter.write().await.mode = Mode::Sessions;
 
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Down, KeyModifiers::empty()), Ipc::new()).await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await;
     assert!(result.is_ok());
     assert_eq!(greeter.read().await.sessions.selected, 0);
   }
@@ -686,7 +799,12 @@ mod test {
       greeter.buffer = "123456789".to_string();
     }
 
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL), Ipc::new()).await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+      Ipc::new(),
+    )
+    .await;
 
     {
       let status = greeter.read().await;
@@ -695,7 +813,12 @@ mod test {
       assert_eq!(status.cursor_offset, -9);
     }
 
-    let result = handle(greeter.clone(), KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL), Ipc::new()).await;
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+      Ipc::new(),
+    )
+    .await;
 
     {
       let status = greeter.read().await;

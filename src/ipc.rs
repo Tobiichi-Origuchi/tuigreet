@@ -2,14 +2,23 @@ use std::{borrow::Cow, error::Error, io, sync::Arc};
 
 use greetd_ipc::{AuthMessageType, ErrorType, Request, Response, codec::TokioCodec};
 use tokio::sync::{
-  Mutex, RwLock,
+  Mutex,
+  RwLock,
   mpsc::{Receiver, Sender},
 };
 
 use crate::{
-  AuthStatus, Greeter, Mode,
+  AuthStatus,
+  Greeter,
+  Mode,
   event::Event,
-  info::{delete_last_user_command, delete_last_user_session, write_last_user_command, write_last_user_session, write_last_username},
+  info::{
+    delete_last_user_command,
+    delete_last_user_session,
+    write_last_user_command,
+    write_last_user_session,
+    write_last_username,
+  },
   macros::SafeDebug,
   ui::sessions::{Session, SessionSource, SessionType},
 };
@@ -82,26 +91,29 @@ impl Ipc {
     }
 
     match response {
-      Response::AuthMessage { auth_message_type, auth_message } => match auth_message_type {
+      Response::AuthMessage {
+        auth_message_type,
+        auth_message,
+      } => match auth_message_type {
         AuthMessageType::Secret => {
           greeter.mode = Mode::Password;
           greeter.working = false;
           greeter.asking_for_secret = true;
           greeter.set_prompt(&auth_message);
-        }
+        },
 
         AuthMessageType::Visible => {
           greeter.mode = Mode::Password;
           greeter.working = false;
           greeter.asking_for_secret = false;
           greeter.set_prompt(&auth_message);
-        }
+        },
 
         AuthMessageType::Error => {
           greeter.message = Some(auth_message);
 
           self.send(Request::PostAuthMessageResponse { response: None }).await;
-        }
+        },
 
         AuthMessageType::Info => {
           greeter.remove_prompt();
@@ -117,7 +129,7 @@ impl Ipc {
           }
 
           self.send(Request::PostAuthMessageResponse { response: None }).await;
-        }
+        },
       },
 
       Response::Success => {
@@ -136,18 +148,22 @@ impl Ipc {
 
                   write_last_user_command(&greeter.username.value, command);
                   delete_last_user_session(&greeter.username.value);
-                }
+                },
 
                 SessionSource::Session(index) => {
-                  if let Some(Session { path: Some(session_path), .. }) = greeter.sessions.options.get(index) {
+                  if let Some(Session {
+                    path: Some(session_path),
+                    ..
+                  }) = greeter.sessions.options.get(index)
+                  {
                     tracing::info!("caching last user session: {session_path:?}");
 
                     write_last_user_session(&greeter.username.value, session_path);
                     delete_last_user_command(&greeter.username.value);
                   }
-                }
+                },
 
-                _ => {}
+                _ => {},
               }
             }
           }
@@ -164,14 +180,14 @@ impl Ipc {
 
               greeter.message = Some(fl!("command_missing"));
               greeter.reset(false).await;
-            }
+            },
 
             Some(command) if command.is_empty() => {
               Ipc::cancel(greeter).await;
 
               greeter.message = Some(fl!("command_missing"));
               greeter.reset(false).await;
-            }
+            },
 
             Some(command) => {
               greeter.done = true;
@@ -182,18 +198,28 @@ impl Ipc {
               let (command, env) = wrap_session_command(greeter, session, &default);
 
               #[cfg(not(debug_assertions))]
-              self.send(Request::StartSession { cmd: vec![command.to_string()], env }).await;
+              self
+                .send(Request::StartSession {
+                  cmd: vec![command.to_string()],
+                  env,
+                })
+                .await;
 
               #[cfg(debug_assertions)]
               {
                 let _ = command;
 
-                self.send(Request::StartSession { cmd: vec!["true".to_string()], env }).await;
+                self
+                  .send(Request::StartSession {
+                    cmd: vec!["true".to_string()],
+                    env,
+                  })
+                  .await;
               }
-            }
+            },
           }
         }
-      }
+      },
 
       Response::Error { error_type, .. } => {
         // Do not display actual message from greetd, which may contain entered information, sometimes passwords.
@@ -210,15 +236,15 @@ impl Ipc {
               })
               .await;
             greeter.reset(true).await;
-          }
+          },
 
           ErrorType::Error => {
             // Do not display actual message from greetd, which may contain entered information, sometimes passwords.
             greeter.message = Some("An error was received from greetd".to_string());
             greeter.reset(false).await;
-          }
+          },
         }
-      }
+      },
     }
 
     Ok(())
@@ -241,7 +267,9 @@ fn mock_response(request: &Request) -> Response {
       auth_message_type: AuthMessageType::Secret,
       auth_message: "Password: ".to_string(),
     },
-    Request::PostAuthMessageResponse { .. } | Request::StartSession { .. } | Request::CancelSession => Response::Success,
+    Request::PostAuthMessageResponse { .. } | Request::StartSession { .. } | Request::CancelSession => {
+      Response::Success
+    },
   }
 }
 
@@ -261,7 +289,11 @@ impl<'a> DefaultCommand<'a> {
   }
 }
 
-fn wrap_session_command<'a>(greeter: &Greeter, session: Option<&Session>, default: &'a DefaultCommand<'a>) -> (Cow<'a, str>, Vec<String>) {
+fn wrap_session_command<'a>(
+  greeter: &Greeter,
+  session: Option<&Session>,
+  default: &'a DefaultCommand<'a>,
+) -> (Cow<'a, str>, Vec<String>) {
   let mut env: Vec<String> = vec![];
 
   match session {
@@ -281,7 +313,10 @@ fn wrap_session_command<'a>(greeter: &Greeter, session: Option<&Session>, defaul
         env.push(format!("XDG_SESSION_TYPE={}", session_type.as_xdg_session_type()));
       }
       if let Some(xdg_desktop_names) = xdg_desktop_names {
-        env.push(format!("XDG_CURRENT_DESKTOP={}", desktop_names_to_xdg(xdg_desktop_names)));
+        env.push(format!(
+          "XDG_CURRENT_DESKTOP={}",
+          desktop_names_to_xdg(xdg_desktop_names)
+        ));
       }
 
       if *session_type == SessionType::X11 {
@@ -291,7 +326,7 @@ fn wrap_session_command<'a>(greeter: &Greeter, session: Option<&Session>, defaul
       } else if let Some(ref wrap) = greeter.session_wrapper {
         return (Cow::Owned(format!("{} {}", wrap, default.command())), env);
       }
-    }
+    },
 
     _ => {
       // If a wrapper script is used, assume that it is able to set up the
@@ -303,7 +338,7 @@ fn wrap_session_command<'a>(greeter: &Greeter, session: Option<&Session>, defaul
       if let Some(base_env) = default.env() {
         env.append(&mut base_env.clone());
       }
-    }
+    },
   }
 
   (Cow::Borrowed(default.command()), env)
@@ -316,24 +351,31 @@ mod test {
   use greetd_ipc::{AuthMessageType, Request, Response};
   use tokio::sync::RwLock;
 
+  use super::{Ipc, mock_response, wrap_session_command};
   use crate::{
-    Greeter, Mode,
+    Greeter,
+    Mode,
     ipc::{DefaultCommand, desktop_names_to_xdg},
     ui::sessions::{Session, SessionType},
   };
 
-  use super::{Ipc, mock_response, wrap_session_command};
-
   #[test]
   fn mock_responses_follow_authentication_flow() {
     assert!(matches!(
-      mock_response(&Request::CreateSession { username: "test".into() }),
+      mock_response(&Request::CreateSession {
+        username: "test".into()
+      }),
       Response::AuthMessage {
         auth_message_type: AuthMessageType::Secret,
         ..
       }
     ));
-    assert!(matches!(mock_response(&Request::PostAuthMessageResponse { response: Some("secret".into()) }), Response::Success));
+    assert!(matches!(
+      mock_response(&Request::PostAuthMessageResponse {
+        response: Some("secret".into())
+      }),
+      Response::Success
+    ));
     assert!(matches!(mock_response(&Request::CancelSession), Response::Success));
   }
 
@@ -344,7 +386,11 @@ mod test {
     let greeter = Arc::new(RwLock::new(state));
     let mut ipc = Ipc::new();
 
-    ipc.send(Request::CreateSession { username: "test".into() }).await;
+    ipc
+      .send(Request::CreateSession {
+        username: "test".into(),
+      })
+      .await;
     ipc.handle(greeter.clone()).await.unwrap();
 
     let greeter = greeter.read().await;
@@ -420,10 +466,12 @@ mod test {
     let (command, env) = wrap_session_command(&greeter, Some(&session), &default);
 
     assert_eq!(command.as_ref(), "startx /usr/bin/env Session1Cmd");
-    assert_eq!(
-      env,
-      vec!["XDG_SESSION_DESKTOP=thede", "DESKTOP_SESSION=thede", "XDG_SESSION_TYPE=x11", "XDG_CURRENT_DESKTOP=one:two:three"]
-    );
+    assert_eq!(env, vec![
+      "XDG_SESSION_DESKTOP=thede",
+      "DESKTOP_SESSION=thede",
+      "XDG_SESSION_TYPE=x11",
+      "XDG_CURRENT_DESKTOP=one:two:three"
+    ]);
   }
 
   #[test]

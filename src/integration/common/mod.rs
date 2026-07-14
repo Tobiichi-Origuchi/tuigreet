@@ -19,15 +19,14 @@ use tokio::{
   task::{JoinError, JoinHandle},
 };
 
+pub(super) use self::{
+  backend::{TestBackend, output},
+  output::*,
+};
 use crate::{
   Greeter,
   event::{Event, Events},
   ui::sessions::SessionSource,
-};
-
-pub(super) use self::{
-  backend::{TestBackend, output},
-  output::*,
 };
 
 pub(super) struct IntegrationRunner(Arc<RwLock<_IntegrationRunner>>);
@@ -52,7 +51,11 @@ impl IntegrationRunner {
     IntegrationRunner::new_with_size(opts, builder, (200, 40)).await
   }
 
-  pub async fn new_with_size(opts: SessionOptions, builder: Option<fn(&mut Greeter)>, size: (u16, u16)) -> IntegrationRunner {
+  pub async fn new_with_size(
+    opts: SessionOptions,
+    builder: Option<fn(&mut Greeter)>,
+    size: (u16, u16),
+  ) -> IntegrationRunner {
     let socket = NamedTempFile::new().unwrap().into_temp_path().to_path_buf();
 
     let (backend, buffer, tick) = TestBackend::new(size.0, size.1);
@@ -145,21 +148,45 @@ impl IntegrationRunner {
 
   #[allow(unused, unused_must_use)]
   pub async fn send_key(&self, key: KeyCode) {
-    self.0.write().await.sender.send(Event::Key(KeyEvent::new(key, KeyModifiers::empty()))).await;
+    self
+      .0
+      .write()
+      .await
+      .sender
+      .send(Event::Key(KeyEvent::new(key, KeyModifiers::empty())))
+      .await;
   }
 
   #[allow(unused, unused_must_use)]
   pub async fn send_modified_key(&self, key: KeyCode, modifiers: KeyModifiers) {
-    self.0.write().await.sender.send(Event::Key(KeyEvent::new(key, modifiers))).await;
+    self
+      .0
+      .write()
+      .await
+      .sender
+      .send(Event::Key(KeyEvent::new(key, modifiers)))
+      .await;
   }
 
   #[allow(unused, unused_must_use)]
   pub async fn send_text(&self, text: &str) {
     for char in text.chars() {
-      self.0.write().await.sender.send(Event::Key(KeyEvent::new(KeyCode::Char(char), KeyModifiers::empty()))).await;
+      self
+        .0
+        .write()
+        .await
+        .sender
+        .send(Event::Key(KeyEvent::new(KeyCode::Char(char), KeyModifiers::empty())))
+        .await;
     }
 
-    self.0.write().await.sender.send(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()))).await;
+    self
+      .0
+      .write()
+      .await
+      .sender
+      .send(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty())))
+      .await;
   }
 
   #[allow(unused)]

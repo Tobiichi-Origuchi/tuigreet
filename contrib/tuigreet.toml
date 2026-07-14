@@ -19,7 +19,19 @@ issue = false
 time = false
 # time-format = "%Y-%m-%d %H:%M"
 refresh-rate = 2
-# theme = "border=blue;text=white"
+
+[theme]
+# Each field accepts a Ratatui color name, or false to clear a lower layer.
+# border = "blue"
+# text = "white"
+# time = "white"
+# container = "black"
+# title = "blue"
+# greet = "white"
+# prompt = "white"
+# input = "white"
+# action = "white"
+# button = "white"
 
 [text]
 enabled = false

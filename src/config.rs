@@ -2,9 +2,11 @@ use std::{
   env,
   fs,
   path::{Path, PathBuf},
+  str::FromStr,
 };
 
 use getopts::Matches;
+use ratatui::style::Color;
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::event::{DEFAULT_REFRESH_RATE, MAX_REFRESH_RATE};
@@ -38,7 +40,7 @@ pub struct Settings {
   pub user_autocomplete: bool,
   pub min_uid: Option<u32>,
   pub max_uid: Option<u32>,
-  pub theme: Option<String>,
+  pub theme: ThemeSettings,
   pub asterisks: bool,
   pub asterisks_chars: String,
   pub window_padding: u16,
@@ -82,7 +84,7 @@ impl Default for Settings {
       user_autocomplete: false,
       min_uid: None,
       max_uid: None,
-      theme: None,
+      theme: ThemeSettings::default(),
       asterisks: false,
       asterisks_chars: "*".into(),
       window_padding: 0,
@@ -127,7 +129,7 @@ struct Layer {
   user_autocomplete: Option<bool>,
   min_uid: Option<Option<u32>>,
   max_uid: Option<Option<u32>>,
-  theme: Option<Option<String>>,
+  theme: ThemeLayer,
   asterisks: Option<bool>,
   asterisks_chars: Option<String>,
   window_padding: Option<u16>,
@@ -143,6 +145,20 @@ struct Layer {
   kb_command: Option<u8>,
   kb_sessions: Option<u8>,
   kb_power: Option<u8>,
+}
+
+#[derive(Default)]
+struct ThemeLayer {
+  border: Option<Option<String>>,
+  text: Option<Option<String>>,
+  time: Option<Option<String>>,
+  container: Option<Option<String>>,
+  title: Option<Option<String>>,
+  greet: Option<Option<String>>,
+  prompt: Option<Option<String>>,
+  input: Option<Option<String>>,
+  action: Option<Option<String>>,
+  button: Option<Option<String>>,
 }
 
 pub fn load(matches: &Matches) -> (Settings, Vec<String>) {
@@ -242,7 +258,6 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
     remember,
     user_menu,
     user_autocomplete,
-    theme,
     asterisks,
     asterisks_chars,
     window_padding,
@@ -255,6 +270,15 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
     power_hibernate,
     power_setsid,
     mock,
+  );
+
+  macro_rules! apply_theme {
+    ($($field:ident),* $(,)?) => {
+      $(if let Some(value) = layer.theme.$field { settings.theme.$field = value; })*
+    };
+  }
+  apply_theme!(
+    border, text, time, container, title, greet, prompt, input, action, button
   );
 
   if layer.issue == Some(true) && layer.greeting.as_ref().is_some_and(Option::is_some) {
@@ -363,7 +387,9 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
   layer.user_autocomplete = flag("user-autocomplete");
   layer.min_uid = cli_number::<u32>(matches, "user-menu-min-uid", 0, u32::MAX, warnings).map(Some);
   layer.max_uid = cli_number::<u32>(matches, "user-menu-max-uid", 0, u32::MAX, warnings).map(Some);
-  layer.theme = string("theme").map(Some);
+  if let Some(specification) = string("theme") {
+    layer.theme = theme_specification(&specification, "command line --theme", warnings);
+  }
   layer.asterisks = flag("asterisks");
   if let Some(value) = string("asterisks-char") {
     if value.is_empty() {
@@ -426,6 +452,7 @@ fn toml_layer(document: &DocumentMut, path: &Path, source: &str, warnings: &mut 
     "layout",
     "power",
     "keybindings",
+    "theme",
   ];
   warn_unknown(document.as_table(), ROOT, path, source, warnings, "");
   let mut layer = Layer::default();
@@ -484,7 +511,9 @@ fn toml_layer(document: &DocumentMut, path: &Path, source: &str, warnings: &mut 
       warnings,
       "display",
     );
-    layer.theme = read_optional_string(table, "theme", path, source, warnings, "display");
+    if let Some(specification) = read_string(table, "theme", path, source, warnings, "display") {
+      layer.theme = theme_specification(&specification, "display.theme", warnings);
+    }
   }
   if let Some(table) = read_table(document.as_table(), "text", path, source, warnings) {
     warn_unknown(table, &["enabled", "file"], path, source, warnings, "text");
@@ -585,6 +614,29 @@ fn toml_layer(document: &DocumentMut, path: &Path, source: &str, warnings: &mut 
     layer.kb_command = read_u8(table, "command", (1, 12), path, source, warnings, "keybindings");
     layer.kb_sessions = read_u8(table, "sessions", (1, 12), path, source, warnings, "keybindings");
     layer.kb_power = read_u8(table, "power", (1, 12), path, source, warnings, "keybindings");
+  }
+  if let Some(table) = read_table(document.as_table(), "theme", path, source, warnings) {
+    const KEYS: &[&str] = &[
+      "border",
+      "text",
+      "time",
+      "container",
+      "title",
+      "greet",
+      "prompt",
+      "input",
+      "action",
+      "button",
+    ];
+    warn_unknown(table, KEYS, path, source, warnings, "theme");
+    macro_rules! read_theme {
+      ($($field:ident),* $(,)?) => {
+        $(layer.theme.$field = read_theme_color(table, stringify!($field), path, source, warnings);)*
+      };
+    }
+    read_theme!(
+      border, text, time, container, title, greet, prompt, input, action, button
+    );
   }
   layer
 }
@@ -836,6 +888,90 @@ fn valid_time_format(format: &str, field: &str, warnings: &mut Vec<String>) -> b
   }
 }
 
+fn valid_color(value: &str) -> bool {
+  Color::from_str(value).is_ok()
+}
+
+fn read_theme_color(
+  table: &Table,
+  key: &str,
+  path: &Path,
+  source: &str,
+  warnings: &mut Vec<String>,
+) -> Option<Option<String>> {
+  let item = table.get(key)?;
+  if item.as_bool() == Some(false) {
+    return Some(None);
+  }
+  let Some(value) = item.as_str() else {
+    warn_item(
+      Some(item),
+      path,
+      source,
+      warnings,
+      &format!("theme.{key} must be a color string or false"),
+    );
+    return None;
+  };
+  if valid_color(value) {
+    Some(Some(value.to_string()))
+  } else {
+    warn_item(
+      Some(item),
+      path,
+      source,
+      warnings,
+      &format!("theme.{key} has invalid color '{value}'; ignoring it"),
+    );
+    None
+  }
+}
+
+fn theme_specification(specification: &str, source: &str, warnings: &mut Vec<String>) -> ThemeLayer {
+  let mut theme = ThemeLayer {
+    border: Some(None),
+    text: Some(None),
+    time: Some(None),
+    container: Some(None),
+    title: Some(None),
+    greet: Some(None),
+    prompt: Some(None),
+    input: Some(None),
+    action: Some(None),
+    button: Some(None),
+  };
+  for directive in specification.split(';').filter(|directive| !directive.is_empty()) {
+    let Some((key, value)) = directive.split_once('=') else {
+      warnings.push(format!(
+        "{source}: malformed theme directive '{directive}'; ignoring it"
+      ));
+      continue;
+    };
+    if !valid_color(value) {
+      warnings.push(format!("{source}: invalid color '{value}' for '{key}'; ignoring it"));
+      continue;
+    }
+    let destination = match key {
+      "border" => &mut theme.border,
+      "text" => &mut theme.text,
+      "time" => &mut theme.time,
+      "container" => &mut theme.container,
+      "title" => &mut theme.title,
+      "greet" => &mut theme.greet,
+      "prompt" => &mut theme.prompt,
+      "input" => &mut theme.input,
+      "action" => &mut theme.action,
+      "button" => &mut theme.button,
+      _ => {
+        warnings.push(format!("{source}: unknown theme component '{key}'; ignoring it"));
+        continue;
+      },
+    };
+    *destination = Some(Some(value.to_string()));
+  }
+  theme
+}
+
 fn split_paths(value: &str) -> Vec<String> {
   env::split_paths(value)
     .map(|path| path.to_string_lossy().into_owned())
@@ -984,5 +1120,71 @@ mod tests {
 
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(settings, super::Settings::default());
+  }
+
+  #[test]
+  fn theme_fields_merge_and_can_be_cleared() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    let user = dir.path().join("user.toml");
+    write(&system, "[theme]\nborder = 'blue'\ntext = 'white'\n");
+    write(&user, "[theme]\nborder = false\nprompt = 'green'\n");
+
+    let (settings, warnings) = load_paths(Some(&system), Some(&user), None, &matches(&[]));
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(settings.theme.border, None);
+    assert_eq!(settings.theme.text.as_deref(), Some("white"));
+    assert_eq!(settings.theme.prompt.as_deref(), Some("green"));
+  }
+
+  #[test]
+  fn invalid_theme_fields_do_not_replace_valid_colors() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    let user = dir.path().join("user.toml");
+    write(&system, "[theme]\nborder = 'blue'\n");
+    write(&user, "[theme]\nborder = 'not-a-color'\nunknown = 'red'\n");
+
+    let (settings, warnings) = load_paths(Some(&system), Some(&user), None, &matches(&[]));
+
+    assert_eq!(settings.theme.border.as_deref(), Some("blue"));
+    assert!(warnings.iter().any(|warning| warning.contains("invalid color")));
+    assert!(warnings.iter().any(|warning| warning.contains("theme.unknown")));
+  }
+}
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ThemeSettings {
+  pub border: Option<String>,
+  pub text: Option<String>,
+  pub time: Option<String>,
+  pub container: Option<String>,
+  pub title: Option<String>,
+  pub greet: Option<String>,
+  pub prompt: Option<String>,
+  pub input: Option<String>,
+  pub action: Option<String>,
+  pub button: Option<String>,
+}
+
+impl ThemeSettings {
+  pub fn specification(&self) -> String {
+    let fields = [
+      ("border", &self.border),
+      ("text", &self.text),
+      ("time", &self.time),
+      ("container", &self.container),
+      ("title", &self.title),
+      ("greet", &self.greet),
+      ("prompt", &self.prompt),
+      ("input", &self.input),
+      ("action", &self.action),
+      ("button", &self.button),
+    ];
+    fields
+      .into_iter()
+      .filter_map(|(name, value)| value.as_ref().map(|value| format!("{name}={value}")))
+      .collect::<Vec<_>>()
+      .join(";")
   }
 }

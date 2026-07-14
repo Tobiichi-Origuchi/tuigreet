@@ -612,8 +612,9 @@ impl Greeter {
 
     self.debug = settings.debug;
     self.logfile = settings.logfile.clone();
-    if let Some(spec) = &settings.theme {
-      self.theme = Theme::parse(spec);
+    let theme = settings.theme.specification();
+    if !theme.is_empty() {
+      self.theme = Theme::parse(&theme);
     }
     self.secret_display = if settings.asterisks {
       SecretDisplay::Character(settings.asterisks_chars.clone())

@@ -59,8 +59,10 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
     } => {
       use crate::{AuthStatus, Event};
 
-      if let Some(ref sender) = greeter.events {
-        let _ = sender.send(Event::Exit(AuthStatus::Cancel)).await;
+      if let Some(sender) = greeter.events.clone() {
+        tokio::task::spawn(async move {
+          let _ = sender.send(Event::Exit(AuthStatus::Cancel)).await;
+        });
       }
     },
 
@@ -485,10 +487,15 @@ mod test {
   use std::sync::Arc;
 
   use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-  use tokio::sync::RwLock;
+  use tokio::{
+    sync::{RwLock, mpsc},
+    time::{Duration, timeout},
+  };
 
   use super::{Completion, common_prefix, complete_username, handle};
   use crate::{
+    AuthStatus,
+    Event,
     Greeter,
     Mode,
     ipc::Ipc,
@@ -546,6 +553,31 @@ mod test {
   #[test]
   fn common_prefix_handles_characters_not_bytes() {
     assert_eq!(common_prefix(&["ørlin", "ørjan"]), Some("ør".into()));
+  }
+
+  #[tokio::test]
+  async fn ctrl_x_does_not_block_on_a_full_event_queue() {
+    let (sender, mut receiver) = mpsc::channel(1);
+    sender.send(Event::Render).await.unwrap();
+
+    let mut state = Greeter::default();
+    state.events = Some(sender);
+    let greeter = Arc::new(RwLock::new(state));
+
+    timeout(
+      Duration::from_secs(1),
+      handle(
+        greeter,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        Ipc::new(),
+      ),
+    )
+    .await
+    .expect("Ctrl-X blocked on the event queue")
+    .unwrap();
+
+    assert!(matches!(receiver.recv().await, Some(Event::Render)));
+    assert!(matches!(receiver.recv().await, Some(Event::Exit(AuthStatus::Cancel))));
   }
 
   #[tokio::test]

@@ -4,7 +4,7 @@ on:
   push:
     branches: [ master ]
     paths:
-      - packaging/aur/tuigreety-git/PKGBUILD
+      - packaging/aur/greetd-tuigreety-git/PKGBUILD
       - packaging/aur/tuigreet.conf
   workflow_dispatch:
 
@@ -48,7 +48,7 @@ jobs:
           runuser -u builder -- git config --global user.email 'Tobiichi-Origuchi@users.noreply.github.com'
       - name: Prepare and validate package
         run: |
-          directory=packaging/aur/tuigreety-git
+          directory=packaging/aur/greetd-tuigreety-git
           cp packaging/aur/tuigreet.conf "$directory/tuigreet.conf"
           chown -R builder:builder "$directory"
           runuser -u builder -- sh -c "cd '$directory' && updpkgsums"
@@ -56,9 +56,9 @@ jobs:
           runuser -u builder -- sh -c "cd '$directory' && makepkg --printsrcinfo > .SRCINFO"
       - name: Publish package
         run: |
-          directory=packaging/aur/tuigreety-git
-          repository=/home/builder/tuigreety-git
-          runuser -u builder -- git clone ssh://aur@aur.archlinux.org/tuigreety-git.git "$repository"
+          directory=packaging/aur/greetd-tuigreety-git
+          repository=/home/builder/greetd-tuigreety-git
+          runuser -u builder -- git clone ssh://aur@aur.archlinux.org/greetd-tuigreety-git.git "$repository"
           install -m644 -o builder -g builder "$directory/PKGBUILD" "$repository/PKGBUILD"
           install -m644 -o builder -g builder "$directory/.SRCINFO" "$repository/.SRCINFO"
           install -m644 -o builder -g builder "$directory/tuigreet.conf" "$repository/tuigreet.conf"

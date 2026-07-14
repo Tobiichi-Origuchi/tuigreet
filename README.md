@@ -120,9 +120,9 @@ Cache directory must be created for `--remember*` features to work. The director
 
 The original project remains available from Arch Linux's official repositories as `greetd-tuigreet`. This fork is published to the AUR in three variants:
 
-- `tuigreety` builds the latest tagged release locally.
-- `tuigreety-bin` installs the prebuilt release binary.
-- `tuigreety-git` builds the latest `master` revision.
+- `greetd-tuigreety` builds the latest tagged release locally.
+- `greetd-tuigreety-bin` installs the prebuilt release binary.
+- `greetd-tuigreety-git` builds the latest `master` revision.
 
 All three install `/usr/bin/tuigreet`, provide `greetd-greeter`, and conflict with `greetd-tuigreet` and each other.
 

@@ -58,7 +58,7 @@ jobs:
           runuser -u builder -- git config --global user.email 'Tobiichi-Origuchi@users.noreply.github.com'
       - name: Prepare and validate packages
         run: |
-          for package in tuigreety tuigreety-bin; do
+          for package in greetd-tuigreety greetd-tuigreety-bin; do
             directory="packaging/aur/$package"
             cp packaging/aur/tuigreet.conf "$directory/tuigreet.conf"
             sed -i "s/^pkgver=.*/pkgver=$VERSION/" "$directory/PKGBUILD"
@@ -69,7 +69,7 @@ jobs:
           done
       - name: Publish packages
         run: |
-          for package in tuigreety tuigreety-bin; do
+          for package in greetd-tuigreety greetd-tuigreety-bin; do
             directory="packaging/aur/$package"
             repository="/home/builder/$package"
             runuser -u builder -- git -c init.defaultBranch=master clone "ssh://aur@aur.archlinux.org/$package.git" "$repository"

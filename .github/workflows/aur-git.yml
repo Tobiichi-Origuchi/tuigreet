@@ -21,7 +21,7 @@ jobs:
     container: archlinux:base-devel
     steps:
       - name: Install packaging tools
-        run: pacman -Syu --noconfirm git openssh pacman-contrib rustup scdoc greetd
+        run: pacman -Syu --noconfirm git openssh pacman-contrib rust scdoc greetd
       - uses: actions/checkout@v7.0.0
       - name: Configure build and SSH users
         env:

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.1 - 2026-07-15
+
+### Added
+
+- [`5bf0e03`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/5bf0e034e4c9fa2728e11e8bd5557e0f686ba6ba) Add configuration hot reload with last-known-good fallback for invalid updates.
+- [`af9d6b4`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/af9d6b4951656876eec027cb4e5b08236da3856a) Add `--check-config`, source-located diagnostics, and a fully documented system configuration template.
+
+### Changed
+
+- [`5bb3a73`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/5bb3a73833f7be3afe95aa6e47a18edaa5d922d3) Restrict display-manager configuration to system and explicitly selected files; CLI options remain highest priority.
+- [`af9d6b4`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/af9d6b4951656876eec027cb4e5b08236da3856a) Reject duplicate TOML keys and preserve valid runtime settings when configuration parsing fails.
+
+### Fixed
+
+- [`aec2031`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/aec2031e37e8501d09a0c18a909839a16af8ed96) Prevent exit requests from deadlocking when the event queue is full.
+
+### Removed
+
+- [`811434c`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/811434c42f1576662f869d2ecb10083ff019d503) Remove external text overrides and the obsolete `text.conf` interface.
+
 ## 0.10.0 - 2026-07-14
 
 ### Added

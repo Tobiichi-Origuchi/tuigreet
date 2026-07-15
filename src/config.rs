@@ -28,8 +28,6 @@ pub struct Settings {
   pub width: u16,
   pub issue: bool,
   pub greeting: Option<String>,
-  pub text_config: bool,
-  pub text_config_file: Option<PathBuf>,
   pub time: bool,
   pub time_format: Option<String>,
   pub refresh_rate: u16,
@@ -72,8 +70,6 @@ impl Default for Settings {
       width: 80,
       issue: false,
       greeting: None,
-      text_config: false,
-      text_config_file: None,
       time: false,
       time_format: None,
       refresh_rate: DEFAULT_REFRESH_RATE,
@@ -117,8 +113,6 @@ struct Layer {
   width: Option<u16>,
   issue: Option<bool>,
   greeting: Option<Option<String>>,
-  text_config: Option<bool>,
-  text_config_file: Option<Option<PathBuf>>,
   time: Option<bool>,
   time_format: Option<Option<String>>,
   refresh_rate: Option<u16>,
@@ -229,8 +223,6 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
     session_wrapper,
     xsession_wrapper,
     width,
-    text_config,
-    text_config_file,
     time,
     time_format,
     refresh_rate,
@@ -353,8 +345,6 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
   layer.width = cli_number(matches, "width", 1, u16::MAX, warnings);
   layer.issue = flag("issue");
   layer.greeting = string("greeting").map(Some);
-  layer.text_config = flag("text-config");
-  layer.text_config_file = string("text-config-file").map(|path| Some(path.into()));
   layer.time = flag("time");
   layer.time_format =
     string("time-format").and_then(|value| valid_time_format(&value, "--time-format", warnings).then_some(Some(value)));
@@ -424,7 +414,6 @@ fn toml_layer(document: &DocumentMut, path: &Path, source: &str, warnings: &mut 
     "general",
     "session",
     "display",
-    "text",
     "remember",
     "users",
     "secret",
@@ -493,12 +482,6 @@ fn toml_layer(document: &DocumentMut, path: &Path, source: &str, warnings: &mut 
     if let Some(specification) = read_string(table, "theme", path, source, warnings, "display") {
       layer.theme = theme_specification(&specification, "display.theme", warnings);
     }
-  }
-  if let Some(table) = read_table(document.as_table(), "text", path, source, warnings) {
-    warn_unknown(table, &["enabled", "file"], path, source, warnings, "text");
-    layer.text_config = read_bool(table, "enabled", path, source, warnings, "text");
-    layer.text_config_file =
-      read_optional_string(table, "file", path, source, warnings, "text").map(|value| value.map(PathBuf::from));
   }
   if let Some(table) = read_table(document.as_table(), "remember", path, source, warnings) {
     warn_unknown(

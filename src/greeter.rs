@@ -451,17 +451,6 @@ impl Greeter {
     opts.optopt("w", "width", "width of the main prompt (default: 80)", "WIDTH");
     opts.optflag("i", "issue", "show the host's issue file");
     opts.optopt("g", "greeting", "show custom text above login prompt", "GREETING");
-    opts.optflag(
-      "",
-      "text-config",
-      "load text overrides from the system configuration file",
-    );
-    opts.optopt(
-      "",
-      "text-config-file",
-      "load text overrides from an explicit file",
-      "FILE",
-    );
     opts.optflag("t", "time", "display the current date and time");
     opts.optopt(
       "",
@@ -595,19 +584,6 @@ impl Greeter {
     }
     self.settings = settings.clone();
 
-    if settings.text_config
-      && let Err(error) = self.text.load_standard()
-    {
-      eprintln!("tuigreet: warning: cannot load standard text configuration: {error}");
-    }
-    if let Some(path) = &settings.text_config_file
-      && let Err(error) = self.text.load_file(path)
-    {
-      eprintln!(
-        "tuigreet: warning: {}: cannot load text configuration: {error}",
-        path.display()
-      );
-    }
     self.powers.title = text!(self, title_power);
 
     self.debug = settings.debug;
@@ -918,23 +894,6 @@ mod test {
       (PathBuf::from("/sessions"), SessionType::Wayland)
     );
     assert_eq!(greeter.session_paths[1], (PathBuf::from("/sessions"), SessionType::X11));
-  }
-
-  #[tokio::test]
-  async fn explicit_text_config_overrides_defaults() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("text.conf");
-    std::fs::write(&path, "username=Login:\ntitle_power=Actions\n").unwrap();
-    let mut greeter = Greeter::default();
-
-    greeter
-      .parse_options(&["--text-config-file".as_ref(), path.as_os_str()])
-      .await
-      .unwrap();
-
-    assert_eq!(greeter.text.username, "Login:");
-    assert_eq!(greeter.powers.title, "Actions");
-    assert_eq!(greeter.text.reboot, "Reboot");
   }
 
   #[test]

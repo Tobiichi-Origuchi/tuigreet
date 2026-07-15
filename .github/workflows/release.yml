@@ -94,7 +94,6 @@ jobs:
           package="tuigreety-${VERSION}-${{ matrix.name }}"
           install -Dm755 "target/${{ matrix.target }}/release/tuigreet" "dist/${package}/bin/tuigreet"
           install -Dm644 contrib/tuigreet.toml "dist/${package}/share/tuigreet/config.toml"
-          install -Dm644 contrib/text.conf "dist/${package}/share/tuigreet/text.conf"
           install -Dm644 LICENSE "dist/${package}/share/licenses/tuigreet/LICENSE"
           install -Dm644 README.md "dist/${package}/share/doc/tuigreet/README.md"
           install -Dm644 dist/metadata/tuigreet.1 "dist/${package}/share/man/man1/tuigreet.1"

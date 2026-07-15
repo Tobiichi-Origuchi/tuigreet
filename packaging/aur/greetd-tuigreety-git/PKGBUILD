@@ -36,7 +36,6 @@ package() {
   install -Dm755 target/release/tuigreet "$pkgdir/usr/bin/tuigreet"
   install -Dm644 tuigreet.1 "$pkgdir/usr/share/man/man1/tuigreet.1"
   install -Dm644 contrib/tuigreet.toml "$pkgdir/usr/share/doc/$pkgname/examples/config.toml"
-  install -Dm644 contrib/text.conf "$pkgdir/usr/share/doc/$pkgname/examples/text.conf"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 "$srcdir/tuigreet.conf" "$pkgdir/usr/lib/tmpfiles.d/tuigreet.conf"
 }

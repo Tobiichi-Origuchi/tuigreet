@@ -30,9 +30,6 @@ Options:
     -i, --issue         show the host's issue file
     -g, --greeting GREETING
                         show custom text above login prompt
-        --text-config   load text overrides from the system configuration file
-        --text-config-file FILE
-                        load text overrides from an explicit file
     -t, --time          display the current date and time
         --time-format FORMAT
                         custom strftime format for displaying date and time
@@ -127,7 +124,7 @@ All three install `/usr/bin/tuigreet`, provide `greetd-greeter`, and conflict wi
 
 ### Pre-built binaries
 
-Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each package includes the binary, man page, license, README, and complete examples for the TOML and text configuration files. The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreety/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
+Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each package includes the binary, man page, license, README, and a complete example TOML configuration file. The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreety/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
 
 ## Running the tests
 
@@ -186,12 +183,6 @@ user = "greeter"
 ```
 
 Please refer to [greetd's wiki](https://man.sr.ht/~kennylevinsen/greetd/) for more information on setting up `greetd`.
-
-### Text overrides
-
-The interface uses built-in English text and does not inspect the locale or read text configuration files by default. `--text-config` enables optional overrides from `/etc/tuigreet/text.conf`. `--text-config-file FILE` loads an explicitly selected file after it, or by itself when `--text-config` is absent.
-
-Files use `key=value` entries. Every field may be omitted; omitted fields retain their built-in value. Unknown fields are rejected so spelling mistakes do not silently produce a partially customized interface. See [`contrib/text.conf`](contrib/text.conf) for all supported fields. The `{hostname}` placeholder in `title_authenticate` is replaced at runtime.
 
 ### Sessions
 

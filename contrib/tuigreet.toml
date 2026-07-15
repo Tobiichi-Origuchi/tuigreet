@@ -33,10 +33,6 @@ refresh-rate = 2
 # action = "white"
 # button = "white"
 
-[text]
-enabled = false
-# file = "/etc/tuigreet/text.conf"
-
 [remember]
 username = false
 session = false

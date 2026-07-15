@@ -51,7 +51,7 @@ const CURSOR_BLINK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[tokio::main]
 async fn main() {
-  let args = env::args().collect::<Vec<_>>();
+  let args = arguments_after_program(env::args_os());
   if print_information(&args) {
     return;
   }
@@ -68,6 +68,10 @@ async fn main() {
 
     process::exit(1);
   }
+}
+
+fn arguments_after_program<T>(args: impl IntoIterator<Item = T>) -> Vec<T> {
+  args.into_iter().skip(1).collect()
 }
 
 async fn run<B>(backend: B, mut greeter: Greeter, mut events: Events) -> Result<(), Box<dyn Error>>

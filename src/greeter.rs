@@ -218,7 +218,7 @@ impl Greeter {
 
     #[cfg(not(test))]
     {
-      let args = env::args().collect::<Vec<String>>();
+      let args = crate::arguments_after_program(env::args_os());
 
       if let Err(err) = greeter.parse_options(&args).await {
         eprintln!("{err}");
@@ -879,11 +879,7 @@ where
     true
   } else if args.iter().any(|arg| arg.as_ref().to_str() == Some("--check-config")) {
     let opts = Greeter::options();
-    let first_is_program = args
-      .first()
-      .and_then(|arg| arg.as_ref().to_str())
-      .is_some_and(|arg| !arg.starts_with('-'));
-    let (matches, warnings) = parse_options_ignoring_invalid(&opts, &args[usize::from(first_is_program)..]);
+    let (matches, warnings) = parse_options_ignoring_invalid(&opts, args);
     for warning in &warnings {
       eprintln!("tuigreet: warning: {warning}");
     }
@@ -963,7 +959,7 @@ fn print_version() {
 mod test {
   use std::path::PathBuf;
 
-  use super::{mock_sessions, print_information};
+  use super::{mock_sessions, parse_options_ignoring_invalid, print_information};
   use crate::{
     Greeter,
     SecretDisplay,
@@ -1036,9 +1032,19 @@ mod test {
 
   #[test]
   fn test_information_options() {
-    assert!(print_information(&["tuigreet", "--help"]));
-    assert!(print_information(&["tuigreet", "-v"]));
-    assert!(!print_information(&["tuigreet", "--time"]));
+    assert!(print_information(&["--help"]));
+    assert!(print_information(&["-v"]));
+    assert!(!print_information(&["--time"]));
+  }
+
+  #[test]
+  fn program_name_is_not_an_option() {
+    let args = crate::arguments_after_program(["tuigreet", "--mock"]);
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &args);
+
+    assert!(matches.opt_present("mock"));
+    assert!(matches.free.is_empty());
+    assert!(warnings.is_empty());
   }
 
   #[tokio::test]

@@ -420,6 +420,11 @@ impl Greeter {
     opts.optflag("h", "help", "show this usage information");
     opts.optflag("v", "version", "print version information");
     opts.optopt("", "config", "load an explicit TOML configuration file", "FILE");
+    opts.optflag(
+      "",
+      "check-config",
+      "show active configuration files, validate them, and exit",
+    );
     opts.optflagopt(
       "d",
       "debug",
@@ -871,6 +876,22 @@ where
     .any(|arg| matches!(arg.as_ref().to_str(), Some("-h" | "--help")))
   {
     print_usage(Greeter::options());
+    true
+  } else if args.iter().any(|arg| arg.as_ref().to_str() == Some("--check-config")) {
+    let opts = Greeter::options();
+    let first_is_program = args
+      .first()
+      .and_then(|arg| arg.as_ref().to_str())
+      .is_some_and(|arg| !arg.starts_with('-'));
+    let (matches, warnings) = parse_options_ignoring_invalid(&opts, &args[usize::from(first_is_program)..]);
+    for warning in &warnings {
+      eprintln!("tuigreet: warning: {warning}");
+    }
+    let config_valid = crate::config::check(&matches);
+    let valid = warnings.is_empty() && config_valid;
+    if !valid {
+      process::exit(1);
+    }
     true
   } else if args
     .iter()

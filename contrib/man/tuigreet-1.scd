@@ -17,8 +17,13 @@ tuigreet - A graphical console greeter for greetd
 	Print program version and exit.
 
 *--config FILE*
-	Load an explicit TOML configuration file. It overrides the standard system
-	and user files, while individual command-line options override it.
+	Load an explicit TOML configuration file after the system file. Individual
+	command-line options override it.
+
+*--check-config*
+	Print every active configuration path, validate the effective configuration,
+	and exit. Any syntax, field, type, range, or relationship warning produces a
+	non-zero exit status. Use with *--config FILE* to check an explicit layer.
 
 *-d, --debug [FILE]*
 	Enables debug logging to the provided FILE path, or to /tmp/tuigreet.log if no
@@ -163,6 +168,10 @@ All fields are optional. Unknown or invalid fields are warned about and ignored
 individually; an invalid TOML document is ignored as a whole. Configuration and
 command-line mistakes do not prevent tuigreet from starting. See the example
 *contrib/tuigreet.toml* distributed with the source for the complete schema.
+
+Duplicate keys and duplicate table declarations are invalid TOML. A file with
+duplicates is rejected as a whole rather than applying an arbitrary occurrence.
+Use *--check-config* for source-context diagnostics without starting the greeter.
 
 The system and explicit configuration files are monitored and valid changes are
 applied automatically. Command-line options retain the highest priority. An

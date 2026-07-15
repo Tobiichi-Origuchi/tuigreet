@@ -9,6 +9,7 @@ url='https://github.com/Tobiichi-Origuchi/tuigreety'
 license=('GPL-3.0-or-later')
 provides=('greetd-greeter' "greetd-tuigreety=$pkgver" "tuigreety=$pkgver")
 conflicts=('greetd-tuigreet' 'greetd-tuigreety' 'greetd-tuigreety-git' 'tuigreety' 'tuigreety-bin' 'tuigreety-git')
+backup=('etc/tuigreet/config.toml')
 source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/$pkgver/tuigreety-$pkgver-x86_64.tar.gz")
 source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/$pkgver/tuigreety-$pkgver-aarch64.tar.gz")
 source_armv7h=("$pkgname-$pkgver-armv7.tar.gz::$url/releases/download/$pkgver/tuigreety-$pkgver-armv7.tar.gz")
@@ -27,7 +28,7 @@ package() {
   cd "tuigreety-$pkgver-$release_arch"
   install -Dm755 bin/tuigreet "$pkgdir/usr/bin/tuigreet"
   install -Dm644 share/man/man1/tuigreet.1 "$pkgdir/usr/share/man/man1/tuigreet.1"
-  install -Dm644 share/tuigreet/config.toml "$pkgdir/usr/share/doc/$pkgname/examples/config.toml"
+  install -Dm644 etc/tuigreet/config.toml "$pkgdir/etc/tuigreet/config.toml"
   install -Dm644 share/licenses/tuigreet/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 "$srcdir/tuigreet.conf" "$pkgdir/usr/lib/tmpfiles.d/tuigreet.conf"
 }

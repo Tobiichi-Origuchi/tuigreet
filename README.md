@@ -11,6 +11,8 @@ Options:
     -h, --help          show this usage information
     -v, --version       print version information
         --config FILE   load an explicit TOML configuration file
+        --check-config  show active configuration files, validate them, and
+                        exit
     -d, --debug [FILE]  enable debug logging to the provided file, or to
                         /tmp/tuigreet.log
     -c, --cmd COMMAND   command to run
@@ -120,11 +122,11 @@ The original project remains available from Arch Linux's official repositories a
 - `greetd-tuigreety-bin` installs the prebuilt release binary.
 - `greetd-tuigreety-git` builds the latest `master` revision.
 
-All three install `/usr/bin/tuigreet`, provide `greetd-greeter`, and conflict with `greetd-tuigreet` and each other.
+All three install `/usr/bin/tuigreet` and `/etc/tuigreet/config.toml`, provide `greetd-greeter`, and conflict with `greetd-tuigreet` and each other. Package upgrades preserve administrator changes to the configuration file.
 
 ### Pre-built binaries
 
-Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each package includes the binary, man page, license, README, and a complete example TOML configuration file. The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreety/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
+Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each package includes the binary, man page, license, README, and a ready-to-install `/etc/tuigreet/config.toml`. The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreety/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
 
 ## Running the tests
 
@@ -150,6 +152,8 @@ tuigreet reads TOML configuration from these layers, with later layers overridin
 3. Individual command-line options
 
 All fields are optional. Unknown fields, invalid values, unreadable files, and malformed command-line options produce warnings on standard error and are ignored; valid fields still take effect. A file with invalid TOML syntax is ignored as a whole. This makes a configuration mistake non-fatal, while preserving the previous valid layer or built-in default.
+
+TOML does not permit duplicate keys or duplicate table declarations. Such duplicates are syntax errors, so tuigreet rejects that file instead of choosing one value arbitrarily. Run `tuigreet --check-config`, optionally together with `--config FILE`, to print every active path and validate syntax, field names, value types, ranges, and relationships. The check command exits unsuccessfully for any error or warning; ordinary greeter startup remains non-fatal.
 
 The system configuration and an explicit configuration file, when selected, are monitored for changes. Valid updates are applied automatically, while command-line options retain the highest priority. An unreadable or malformed update is rejected and the last valid runtime configuration remains active. Changes to `general.debug`, `general.log-file`, and `general.mock` require a restart.
 

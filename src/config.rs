@@ -1,13 +1,15 @@
 use std::{
   env,
   fs,
+  io::{self, Write},
+  ops::Range,
   path::{Path, PathBuf},
   str::FromStr,
 };
 
 use getopts::Matches;
 use ratatui::style::Color;
-use toml_edit::{DocumentMut, Item, Table};
+use toml_edit::{Document, Item, Table};
 
 use crate::event::{DEFAULT_REFRESH_RATE, MAX_REFRESH_RATE};
 
@@ -191,8 +193,7 @@ fn reload_paths(
   Ok((settings, warnings))
 }
 
-#[cfg(not(test))]
-pub fn watched_paths(matches: &Matches) -> Vec<PathBuf> {
+fn active_paths(matches: &Matches) -> Vec<PathBuf> {
   let mut paths = vec![PathBuf::from(SYSTEM_CONFIG)];
   if let Some(path) = matches.opt_str("config").map(PathBuf::from)
     && path != Path::new(SYSTEM_CONFIG)
@@ -200,6 +201,35 @@ pub fn watched_paths(matches: &Matches) -> Vec<PathBuf> {
     paths.push(path);
   }
   paths
+}
+
+#[cfg(not(test))]
+pub fn watched_paths(matches: &Matches) -> Vec<PathBuf> {
+  active_paths(matches)
+}
+
+pub fn check(matches: &Matches) -> bool {
+  println!("Configuration files:");
+  for (index, path) in active_paths(matches).iter().enumerate() {
+    let role = if index == 0 { "system, optional" } else { "explicit" };
+    let state = if path.exists() { "found" } else { "not found" };
+    println!("  {} ({role}; {state})", path.display());
+  }
+  let _ = io::stdout().flush();
+
+  match reload(matches) {
+    Ok((_, warnings)) if warnings.is_empty() => {
+      println!("Configuration is valid.");
+      true
+    },
+    Ok((_, warnings)) | Err(warnings) => {
+      for warning in warnings {
+        eprintln!("{warning}");
+      }
+      eprintln!("Configuration is invalid.");
+      false
+    },
+  }
 }
 
 fn load_paths(system: Option<&Path>, explicit: Option<&Path>, matches: &Matches) -> (Settings, Vec<String>) {
@@ -251,10 +281,10 @@ fn load_required(path: &Path, settings: &mut Settings, warnings: &mut Vec<String
       return false;
     },
   };
-  let document = match content.parse::<DocumentMut>() {
+  let document = match content.parse::<Document<String>>() {
     Ok(document) => document,
     Err(error) => {
-      warnings.push(format!("{}: invalid TOML: {error}", path.display()));
+      warnings.push(toml_diagnostic(path, &content, &error));
       return false;
     },
   };
@@ -262,6 +292,33 @@ fn load_required(path: &Path, settings: &mut Settings, warnings: &mut Vec<String
   let layer = toml_layer(&document, path, &content, warnings);
   apply_layer(settings, layer, &path.display().to_string(), warnings);
   true
+}
+
+fn toml_diagnostic(path: &Path, source: &str, error: &toml_edit::TomlError) -> String {
+  let Some(span) = error.span() else {
+    return format!("error: invalid TOML in {}: {}", path.display(), error.message());
+  };
+  source_diagnostic("error", "invalid TOML", path, source, span, error.message())
+}
+
+fn source_diagnostic(level: &str, title: &str, path: &Path, source: &str, span: Range<usize>, message: &str) -> String {
+  let offset = span.start.min(source.len());
+  let (line, column) = line_column(source, offset);
+  let line_start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+  let line_end = source[offset..].find('\n').map_or(source.len(), |index| offset + index);
+  let source_line = &source[line_start..line_end];
+  let underline_start = source[line_start..offset].chars().count();
+  let underline_end = span.end.min(line_end);
+  let underline_width = source[offset..underline_end].chars().count().max(1);
+  let gutter = line.to_string().len();
+
+  format!(
+    "{level}: {title}\n{space:>gutter$}--> {path}:{line}:{column}\n{space:>gutter$} |\n{line:>gutter$} | {source_line}\n{space:>gutter$} | {padding}{carets} {message}",
+    space = "",
+    path = path.display(),
+    padding = " ".repeat(underline_start),
+    carets = "^".repeat(underline_width),
+  )
 }
 
 fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &mut Vec<String>) {
@@ -465,7 +522,7 @@ where
   }
 }
 
-fn toml_layer(document: &DocumentMut, path: &Path, source: &str, warnings: &mut Vec<String>) -> Layer {
+fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: &mut Vec<String>) -> Layer {
   const ROOT: &[&str] = &[
     "general",
     "session",
@@ -684,8 +741,8 @@ fn warn_unknown(table: &Table, allowed: &[&str], path: &Path, source: &str, warn
       } else {
         format!("{prefix}.{key}")
       };
-      warn_item(
-        Some(item),
+      warn_span(
+        table.key(key).and_then(|key| key.span()).or_else(|| item.span()),
         path,
         source,
         warnings,
@@ -865,20 +922,25 @@ fn read_u32(
 }
 
 fn warn_item(item: Option<&Item>, path: &Path, source: &str, warnings: &mut Vec<String>, message: &str) {
-  let location = item
-    .and_then(Item::span)
-    .map(|span| line_column(source, span.start))
-    .map_or_else(
-      || path.display().to_string(),
-      |(line, column)| format!("{}:{line}:{column}", path.display()),
-    );
-  warnings.push(format!("{location}: {message}"));
+  warn_span(item.and_then(Item::span), path, source, warnings, message);
+}
+
+fn warn_span(span: Option<Range<usize>>, path: &Path, source: &str, warnings: &mut Vec<String>, message: &str) {
+  warnings.push(span.map_or_else(
+    || format!("warning: {message}\n  --> {}", path.display()),
+    |span| source_diagnostic("warning", "invalid configuration", path, source, span, message),
+  ));
 }
 
 fn line_column(source: &str, offset: usize) -> (usize, usize) {
   let before = &source[..offset.min(source.len())];
   let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
-  let column = before.rsplit_once('\n').map_or(before.len(), |(_, line)| line.len()) + 1;
+  let column = before
+    .rsplit_once('\n')
+    .map_or(before, |(_, line)| line)
+    .chars()
+    .count()
+    + 1;
   (line, column)
 }
 
@@ -1105,6 +1167,22 @@ mod tests {
 
     assert!(!settings.time);
     assert!(warnings.iter().any(|warning| warning.contains("invalid TOML")));
+    assert!(warnings.iter().any(|warning| warning.contains("-->")));
+  }
+
+  #[test]
+  fn duplicate_keys_are_rejected_with_source_context() {
+    let dir = tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    write(&config, "[display]\nwidth = 80\nwidth = 100\n");
+
+    let (settings, warnings) = load_paths(Some(&config), None, &matches(&[]));
+
+    assert_eq!(settings.width, 80);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("config.toml:3:1"));
+    assert!(warnings[0].contains("duplicate key"));
+    assert!(warnings[0].contains("3 | width = 100"));
   }
 
   #[test]
@@ -1140,7 +1218,7 @@ mod tests {
   #[test]
   fn distributed_example_is_complete_and_valid() {
     let document = include_str!("../contrib/tuigreet.toml")
-      .parse::<toml_edit::DocumentMut>()
+      .parse::<toml_edit::Document<String>>()
       .unwrap();
     let mut warnings = Vec::new();
     let layer = super::toml_layer(

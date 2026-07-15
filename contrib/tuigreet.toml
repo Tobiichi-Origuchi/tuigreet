@@ -1,27 +1,49 @@
-# Every field is optional. These values match tuigreet's defaults.
+# tuigreet configuration
+#
+# Every field is optional. Uncomment only the settings you want to change.
+# The commented values below are defaults unless the comment says "example".
+# Changes are reloaded automatically; CLI options still take priority.
+# Validate this file with: tuigreet --check-config
+
 [general]
-debug = false
-log-file = "/tmp/tuigreet.log"
-mock = false
+# Write debug logs. Changing this while running requires a restart.
+# debug = false
+# Log destination used when debug is enabled. Requires a restart.
+# log-file = "/tmp/tuigreet.log"
+# Run without greetd for UI testing. Requires a restart.
+# mock = false
 
 [session]
+# Command selected at startup instead of the first discovered session (example).
 # command = "sway"
-environment = []
-sessions = []
-xsessions = []
+# Environment entries passed with command; each item must be KEY=VALUE.
+# environment = ["XDG_CURRENT_DESKTOP=sway"]
+# Directories containing Wayland .desktop session files. Empty uses XDG defaults.
+# sessions = []
+# Directories containing X11 .desktop session files. Empty uses XDG defaults.
+# xsessions = []
+# Command prepended to non-X11 sessions (example).
 # wrapper = "dbus-run-session"
-xsession-wrapper = "startx /usr/bin/env" # Set to false to disable it.
+# Command prepended to X11 sessions; false disables the wrapper.
+# xsession-wrapper = "startx /usr/bin/env"
 
 [display]
-width = 80
-issue = false
+# Maximum width of the centered login prompt, in terminal columns.
+# width = 80
+# Show /etc/issue above the prompt. Cannot be combined with greeting.
+# issue = false
+# Fixed text shown above the prompt (example). Cannot be combined with issue.
 # greeting = "Welcome"
-time = false
+# Show the current date and time.
+# time = false
+# strftime format used when time is enabled (example).
 # time-format = "%Y-%m-%d %H:%M"
-refresh-rate = 2
+# Screen refresh rate in frames per second; valid range: 1..=240.
+# refresh-rate = 2
 
 [theme]
-# Each field accepts a Ratatui color name, or false to clear a lower layer.
+# Ratatui color names are accepted. Use false to clear an inherited color.
+# Unset components use the terminal's default colors.
 # border = "blue"
 # text = "white"
 # time = "white"
@@ -34,34 +56,51 @@ refresh-rate = 2
 # button = "white"
 
 [remember]
-username = false
-session = false
-user-session = false
+# Pre-fill the last successfully authenticated username.
+# username = false
+# Restore the last successful session or manually entered command globally.
+# session = false
+# Restore the last successful session per username; also enables username.
+# user-session = false
 
 [users]
-menu = false
-autocomplete = false
+# Show an F-key menu containing eligible local users.
+# menu = false
+# Complete eligible usernames with Tab.
+# autocomplete = false
+# Inclusive UID bounds. Omitted values come from /etc/login.defs when available.
 # min-uid = 1000
 # max-uid = 60000
 
 [secret]
-asterisks = false
-characters = "*"
+# Display one or more characters for each typed secret character.
+# asterisks = false
+# Non-empty character sequence used when asterisks is enabled.
+# characters = "*"
 
 [layout]
-window-padding = 0
-container-padding = 1
-prompt-padding = 1
-greet-align = "center"
+# Blank rows/columns reserved around the entire terminal UI.
+# window-padding = 0
+# Blank cells between the prompt border and its contents.
+# container-padding = 1
+# Blank rows between username and password prompts.
+# prompt-padding = 1
+# Greeting alignment: "left", "center", or "right".
+# greet-align = "center"
 
 [power]
+# Commands available before authentication. Treat custom values as privileged.
 # shutdown = "shutdown -h now"
 # reboot = "shutdown -r now"
+# Suspend command (example); automatically detected for systemd or elogind.
 # suspend = "systemctl suspend"
+# Hibernate command (example); automatically detected for systemd or elogind.
 # hibernate = "systemctl hibernate"
-setsid = true
+# Detach power commands from the current TTY with setsid.
+# setsid = true
 
 [keybindings]
-command = 2
-sessions = 3
-power = 12
+# F-key numbers; each must be unique and in 1..=12.
+# command = 2
+# sessions = 3
+# power = 12

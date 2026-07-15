@@ -164,6 +164,12 @@ individually; an invalid TOML document is ignored as a whole. Configuration and
 command-line mistakes do not prevent tuigreet from starting. See the example
 *contrib/tuigreet.toml* distributed with the source for the complete schema.
 
+The system and explicit configuration files are monitored and valid changes are
+applied automatically. Command-line options retain the highest priority. An
+unreadable or malformed update is rejected, preserving the last valid runtime
+configuration. Changes to *general.debug*, *general.log-file*, and *general.mock*
+require a restart.
+
 # AUTHORS
 
 Maintained by the tuigreet contributors.

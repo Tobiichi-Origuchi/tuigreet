@@ -13,6 +13,8 @@ mod keyboard;
 mod power;
 mod text;
 mod ui;
+#[cfg(not(test))]
+mod watcher;
 
 #[cfg(test)]
 mod integration;
@@ -84,6 +86,9 @@ where
   }
   let greeter = Arc::new(RwLock::new(greeter));
 
+  #[cfg(not(test))]
+  watcher::spawn(config::watched_paths(greeter.read().await.config()), events.sender());
+
   if has_preselected_user {
     tracing::info!("creating initial session for preselected user");
 
@@ -154,6 +159,33 @@ where
           disable_raw_mode()?;
 
           break;
+        }
+      },
+
+      Some(Event::ReloadConfig) => {
+        let refresh_rate = {
+          let mut greeter = greeter.write().await;
+          match config::reload(greeter.config()) {
+            Ok((settings, warnings)) => {
+              for warning in warnings {
+                tracing::warn!("configuration reload: {warning}");
+              }
+              for warning in greeter.reload_settings(settings) {
+                tracing::warn!("configuration reload: {warning}");
+              }
+              Some(greeter.refresh_rate)
+            },
+            Err(warnings) => {
+              for warning in warnings {
+                tracing::warn!("configuration reload rejected: {warning}");
+              }
+              None
+            },
+          }
+        };
+        if let Some(refresh_rate) = refresh_rate {
+          events.set_refresh_rate(refresh_rate);
+          ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
         }
       },
 

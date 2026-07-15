@@ -685,6 +685,121 @@ impl Greeter {
     Ok(())
   }
 
+  pub fn reload_settings(&mut self, mut settings: Settings) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    if settings.debug != self.debug || settings.logfile != self.logfile {
+      warnings.push("general.debug and general.log-file require a restart; keeping their current values".into());
+      settings.debug = self.debug;
+      settings.logfile.clone_from(&self.logfile);
+    }
+    if settings.mock != self.mock {
+      warnings.push("general.mock requires a restart; keeping its current value".into());
+      settings.mock = self.mock;
+    }
+
+    let selected_path = Session::get_selected(self).and_then(|session| session.path.clone());
+    let had_default_command = matches!(self.session_source, SessionSource::DefaultCommand(_, _));
+
+    self.theme = Theme::parse(&settings.theme.specification());
+    self.secret_display = if settings.asterisks {
+      SecretDisplay::Character(settings.asterisks_chars.clone())
+    } else {
+      SecretDisplay::Hidden
+    };
+    self.time = settings.time;
+    self.time_format.clone_from(&settings.time_format);
+    self.refresh_rate = settings.refresh_rate;
+    self.user_menu = settings.user_menu;
+    self.user_autocomplete = settings.user_autocomplete;
+
+    if self.user_menu || self.user_autocomplete {
+      let (min_uid, max_uid) = get_min_max_uids(settings.min_uid, settings.max_uid);
+      self.users = Menu {
+        title: text!(self, title_users),
+        options: get_users(min_uid, max_uid),
+        selected: 0,
+      };
+    } else {
+      self.users.options.clear();
+      if self.mode == Mode::Users {
+        self.mode = Mode::Username;
+      }
+    }
+
+    self.remember = settings.remember;
+    self.remember_session = settings.remember_session;
+    self.remember_user_session = settings.remember_user_session;
+    self.greeting.clone_from(&settings.greeting);
+    if settings.issue {
+      self.greeting = get_issue();
+    }
+
+    self.session_paths.clear();
+    for dir in &settings.sessions {
+      self.add_session_path(PathBuf::from(dir), SessionType::Wayland);
+    }
+    for dir in &settings.xsessions {
+      self.add_session_path(PathBuf::from(dir), SessionType::X11);
+    }
+    self.session_wrapper.clone_from(&settings.session_wrapper);
+    self.xsession_wrapper.clone_from(&settings.xsession_wrapper);
+    self.sessions.options = get_sessions(self).unwrap_or_default();
+    self.sessions.selected = selected_path
+      .as_deref()
+      .and_then(|path| {
+        self
+          .sessions
+          .options
+          .iter()
+          .position(|session| session.path.as_deref() == Some(path))
+      })
+      .unwrap_or(0);
+
+    if let Some(command) = settings.command.clone() {
+      let environment = (!settings.environment.is_empty()).then(|| settings.environment.clone());
+      self.session_source = SessionSource::DefaultCommand(command, environment);
+    } else if selected_path.is_some() && !self.sessions.options.is_empty() {
+      self.session_source = SessionSource::Session(self.sessions.selected);
+    } else if selected_path.is_some() {
+      self.session_source = SessionSource::None;
+    } else if had_default_command {
+      self.session_source = if self.sessions.options.is_empty() {
+        SessionSource::None
+      } else {
+        SessionSource::Session(0)
+      };
+    }
+
+    self.powers.options.clear();
+    for (action, command) in [
+      (PowerOption::Shutdown, settings.power_shutdown.clone()),
+      (PowerOption::Reboot, settings.power_reboot.clone()),
+      (PowerOption::Suspend, settings.power_suspend.clone()),
+      (PowerOption::Hibernate, settings.power_hibernate.clone()),
+    ] {
+      let label = match action {
+        PowerOption::Shutdown => text!(self, shutdown),
+        PowerOption::Reboot => text!(self, reboot),
+        PowerOption::Suspend => text!(self, suspend),
+        PowerOption::Hibernate => text!(self, hibernate),
+      };
+      self.powers.options.push(Power {
+        action,
+        label,
+        command: command.or_else(|| crate::power::default_command(action)),
+      });
+    }
+
+    self.power_setsid = settings.power_setsid;
+    self.kb_command = settings.kb_command;
+    self.kb_sessions = settings.kb_sessions;
+    self.kb_power = settings.kb_power;
+    self.settings = settings;
+
+    warnings
+  }
+
   pub fn set_prompt(&mut self, prompt: &str) {
     self.prompt = if prompt.ends_with(' ') {
       Some(prompt.into())
@@ -865,6 +980,37 @@ mod test {
     greeter.remove_prompt();
 
     assert_eq!(greeter.prompt, None);
+  }
+
+  #[test]
+  fn reload_settings_updates_runtime_values_but_keeps_startup_only_values() {
+    let mut greeter = Greeter::default();
+    greeter.debug = true;
+    greeter.logfile = "/tmp/original.log".into();
+    greeter.mock = true;
+    let mut settings = crate::config::Settings {
+      debug: false,
+      logfile: "/tmp/reloaded.log".into(),
+      mock: false,
+      time: true,
+      refresh_rate: 60,
+      asterisks: true,
+      asterisks_chars: "#".into(),
+      kb_command: 5,
+      ..Default::default()
+    };
+    settings.theme.text = Some("red".into());
+
+    let warnings = greeter.reload_settings(settings);
+
+    assert_eq!(warnings.len(), 2);
+    assert!(greeter.debug);
+    assert_eq!(greeter.logfile, "/tmp/original.log");
+    assert!(greeter.mock);
+    assert!(greeter.time);
+    assert_eq!(greeter.refresh_rate, 60);
+    assert!(matches!(greeter.secret_display, SecretDisplay::Character(ref value) if value == "#"));
+    assert_eq!(greeter.kb_command, 5);
   }
 
   #[test]

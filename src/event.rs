@@ -24,6 +24,7 @@ pub enum Event {
   Key(KeyEvent),
   Render,
   PowerCommand(Command),
+  ReloadConfig,
   Exit(AuthStatus),
 }
 

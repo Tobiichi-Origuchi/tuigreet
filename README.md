@@ -151,6 +151,8 @@ tuigreet reads TOML configuration from these layers, with later layers overridin
 
 All fields are optional. Unknown fields, invalid values, unreadable files, and malformed command-line options produce warnings on standard error and are ignored; valid fields still take effect. A file with invalid TOML syntax is ignored as a whole. This makes a configuration mistake non-fatal, while preserving the previous valid layer or built-in default.
 
+The system configuration and an explicit configuration file, when selected, are monitored for changes. Valid updates are applied automatically, while command-line options retain the highest priority. An unreadable or malformed update is rejected and the last valid runtime configuration remains active. Changes to `general.debug`, `general.log-file`, and `general.mock` require a restart.
+
 See [`contrib/tuigreet.toml`](contrib/tuigreet.toml) for every supported field and its default. Arrays are used for session directories and environment entries, for example:
 
 ```toml

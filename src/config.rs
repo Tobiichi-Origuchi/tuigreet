@@ -160,6 +160,48 @@ pub fn load(matches: &Matches) -> (Settings, Vec<String>) {
   load_paths(Some(Path::new(SYSTEM_CONFIG)), explicit.as_deref(), matches)
 }
 
+pub fn reload(matches: &Matches) -> Result<(Settings, Vec<String>), Vec<String>> {
+  let explicit = matches.opt_str("config").map(PathBuf::from);
+  reload_paths(Path::new(SYSTEM_CONFIG), explicit.as_deref(), matches)
+}
+
+fn reload_paths(
+  system: &Path,
+  explicit: Option<&Path>,
+  matches: &Matches,
+) -> Result<(Settings, Vec<String>), Vec<String>> {
+  let mut settings = Settings::default();
+  let mut warnings = Vec::new();
+
+  if !load_optional_strict(system, &mut settings, &mut warnings) {
+    return Err(warnings);
+  }
+  if let Some(path) = explicit
+    && !load_required(path, &mut settings, &mut warnings)
+  {
+    return Err(warnings);
+  }
+
+  apply_layer(
+    &mut settings,
+    cli_layer(matches, &mut warnings),
+    "command line",
+    &mut warnings,
+  );
+  Ok((settings, warnings))
+}
+
+#[cfg(not(test))]
+pub fn watched_paths(matches: &Matches) -> Vec<PathBuf> {
+  let mut paths = vec![PathBuf::from(SYSTEM_CONFIG)];
+  if let Some(path) = matches.opt_str("config").map(PathBuf::from)
+    && path != Path::new(SYSTEM_CONFIG)
+  {
+    paths.push(path);
+  }
+  paths
+}
+
 fn load_paths(system: Option<&Path>, explicit: Option<&Path>, matches: &Matches) -> (Settings, Vec<String>) {
   let mut settings = Settings::default();
   let mut warnings = Vec::new();
@@ -182,30 +224,44 @@ fn load_paths(system: Option<&Path>, explicit: Option<&Path>, matches: &Matches)
 
 fn load_optional(path: &Path, settings: &mut Settings, warnings: &mut Vec<String>) {
   match path.try_exists() {
-    Ok(true) => load_required(path, settings, warnings),
+    Ok(true) => {
+      load_required(path, settings, warnings);
+    },
     Ok(false) => {},
     Err(error) => warnings.push(format!("{}: cannot access configuration: {error}", path.display())),
   }
 }
 
-fn load_required(path: &Path, settings: &mut Settings, warnings: &mut Vec<String>) {
+fn load_optional_strict(path: &Path, settings: &mut Settings, warnings: &mut Vec<String>) -> bool {
+  match path.try_exists() {
+    Ok(true) => load_required(path, settings, warnings),
+    Ok(false) => true,
+    Err(error) => {
+      warnings.push(format!("{}: cannot access configuration: {error}", path.display()));
+      false
+    },
+  }
+}
+
+fn load_required(path: &Path, settings: &mut Settings, warnings: &mut Vec<String>) -> bool {
   let content = match fs::read_to_string(path) {
     Ok(content) => content,
     Err(error) => {
       warnings.push(format!("{}: cannot read configuration: {error}", path.display()));
-      return;
+      return false;
     },
   };
   let document = match content.parse::<DocumentMut>() {
     Ok(document) => document,
     Err(error) => {
       warnings.push(format!("{}: invalid TOML: {error}", path.display()));
-      return;
+      return false;
     },
   };
 
   let layer = toml_layer(&document, path, &content, warnings);
   apply_layer(settings, layer, &path.display().to_string(), warnings);
+  true
 }
 
 fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &mut Vec<String>) {
@@ -946,7 +1002,7 @@ mod tests {
 
   use tempfile::tempdir;
 
-  use super::load_paths;
+  use super::{load_paths, reload_paths};
   use crate::Greeter;
 
   fn matches(args: &[&str]) -> getopts::Matches {
@@ -1049,6 +1105,24 @@ mod tests {
 
     assert!(!settings.time);
     assert!(warnings.iter().any(|warning| warning.contains("invalid TOML")));
+  }
+
+  #[test]
+  fn reload_rejects_malformed_files_and_preserves_cli_precedence() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    let explicit = dir.path().join("explicit.toml");
+    write(&system, "[display]\nwidth = 40\ntime = true\n");
+    write(&explicit, "[display]\nwidth = 60\n");
+    let cli = matches(&["--width", "80"]);
+
+    let (settings, warnings) = reload_paths(&system, Some(&explicit), &cli).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(settings.width, 80);
+    assert!(settings.time);
+
+    write(&explicit, "[display\nwidth = 60");
+    assert!(reload_paths(&system, Some(&explicit), &cli).is_err());
   }
 
   #[test]

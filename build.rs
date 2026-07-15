@@ -1,18 +1,17 @@
-use std::{env, error::Error, path::Path, process::Command};
+mod build_version;
+
+use std::env;
 
 fn main() {
-  let version = if Path::new(".git").exists() {
-    get_git_version().unwrap_or_else(|_| String::from("unknown"))
-  } else {
-    env!("CARGO_PKG_VERSION").to_string()
-  };
+  let manifest_dir = env::var_os("CARGO_MANIFEST_DIR").expect("Cargo sets CARGO_MANIFEST_DIR");
+  let package_version = env!("CARGO_PKG_VERSION");
 
-  println!("cargo:rustc-env=VERSION={version}");
-  println!("cargo:rustc-env=TARGET={}", env::var("TARGET").unwrap());
-}
+  build_version::emit_rerun_directives(manifest_dir.as_ref());
+  let version = build_version::resolve(manifest_dir.as_ref(), package_version);
 
-fn get_git_version() -> Result<String, Box<dyn Error>> {
-  Ok(String::from_utf8(
-    Command::new("./contrib/git-version.sh").output()?.stdout,
-  )?)
+  println!("cargo::rustc-env=VERSION={version}");
+  println!(
+    "cargo::rustc-env=TARGET={}",
+    env::var("TARGET").expect("Cargo sets TARGET")
+  );
 }

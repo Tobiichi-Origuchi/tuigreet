@@ -27,7 +27,10 @@ tuigreet - A graphical console greeter for greetd
 
 *-d, --debug [FILE]*
 	Enables debug logging to the provided FILE path, or to /tmp/tuigreet.log if no
-	file is specified.
+	file is specified. Logs are appended with mode 0600. FILE must be a regular
+	file without symbolic or additional hard links; otherwise a warning is
+	printed and startup continues without file logging. The path is not accessed
+	when debug logging is disabled.
 
 *-c, --cmd CMD*
 	Specify which command to run on successful authentication. This can be

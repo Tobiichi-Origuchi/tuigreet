@@ -8,7 +8,8 @@
 [general]
 # Write debug logs. Changing this while running requires a restart.
 # debug = false
-# Log destination used when debug is enabled. Requires a restart.
+# Private regular-file log destination used when debug is enabled. Symlinks and
+# files with additional hard links are refused. Requires a restart.
 # log-file = "/tmp/tuigreet.log"
 # Run without greetd for UI testing. Requires a restart.
 # mock = false

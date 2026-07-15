@@ -468,7 +468,7 @@ async fn validate_username(greeter: &mut Greeter, ipc: &Ipc) {
     if greeter.allow_command_editor
       && let Ok(command) = get_last_user_command(&greeter.username.value)
     {
-      tracing::info!("remembered user command is {}", command);
+      tracing::info!("restored a remembered user command");
 
       greeter.session_source = SessionSource::Command(command);
     }

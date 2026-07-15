@@ -10,6 +10,7 @@ mod greeter;
 mod info;
 mod ipc;
 mod keyboard;
+mod logger;
 mod power;
 mod text;
 mod ui;
@@ -19,7 +20,7 @@ mod watcher;
 #[cfg(test)]
 mod integration;
 
-use std::{env, error::Error, fs::OpenOptions, io, process, sync::Arc, time::Duration};
+use std::{env, error::Error, io, process, sync::Arc, time::Duration};
 
 #[cfg(not(test))]
 use crossterm::{
@@ -36,7 +37,6 @@ use greetd_ipc::Request;
 use power::PowerPostAction;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::sync::RwLock;
-use tracing_appender::non_blocking::WorkerGuard;
 
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
@@ -244,34 +244,5 @@ pub fn clear_screen() {
   if let Ok(mut terminal) = Terminal::new(backend) {
     let _ = terminal.hide_cursor();
     let _ = terminal.clear();
-  }
-}
-
-fn init_logger(greeter: &Greeter) -> Option<WorkerGuard> {
-  use tracing_subscriber::{
-    filter::{LevelFilter, Targets},
-    prelude::*,
-  };
-
-  let logfile = OpenOptions::new().write(true).create(true).append(true).clone();
-
-  match (greeter.debug, logfile.open(&greeter.logfile)) {
-    (true, Ok(file)) => {
-      let (appender, guard) = tracing_appender::non_blocking(file);
-      let target = Targets::new().with_target("tuigreet", LevelFilter::DEBUG);
-
-      tracing_subscriber::registry()
-        .with(
-          tracing_subscriber::fmt::layer()
-            .with_writer(appender)
-            .with_line_number(true),
-        )
-        .with(target)
-        .init();
-
-      Some(guard)
-    },
-
-    _ => None,
   }
 }

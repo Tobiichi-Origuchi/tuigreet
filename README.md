@@ -94,6 +94,12 @@ The default configuration tends to be as minimal as possible, visually speaking,
 
 The initial prompt container will be 80 column wide. You may change this with `--width` in case you need more space (for example, to account for large PAM challenge messages). Please refer to usage information (`--help`) for more customization options. Various padding settings are available through the `*-padding` options.
 
+Debug logging appends only to a private (`0600`) regular file. Symbolic links,
+files with additional hard links, and non-regular files are refused. If the
+configured log cannot be opened safely, `tuigreet` prints a warning and
+continues without file logging. The log path is not accessed when debugging is
+disabled.
+
 You can instruct `tuigreet` to remember the last username that successfully opened a session with the `--remember` option (that way, the username field will be pre-filled). Similarly, the selected session can be retained between runs with the `--remember-session` option. You can also remember it per user with `--remember-user-session`. Username and session caches are updated only after greetd confirms that the selected session was started; authentication failures and cancellations do not change them. Check the [cache instructions](#cache-instructions) if `/var/cache/tuigreet` doesn't exist after installing tuigreet.
 
 By default, the session command can only come from administrator configuration or an installed session file. You can list those sessions with `F3`; power options are available through `F12`.

@@ -356,7 +356,16 @@ impl Greeter {
       greeter.connect().await;
     }
 
-    greeter.logger = crate::init_logger(&greeter);
+    greeter.logger = match crate::logger::init(greeter.debug, &greeter.logfile) {
+      Ok(logger) => logger,
+      Err(error) => {
+        eprintln!(
+          "tuigreet: warning: failed to initialize debug log {:?}: {error}",
+          greeter.logfile
+        );
+        None
+      },
+    };
 
     let mut sessions = get_sessions(&greeter).unwrap_or_default();
 

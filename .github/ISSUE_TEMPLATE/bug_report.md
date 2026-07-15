@@ -32,4 +32,6 @@ Add any other context about the problem here.
 
 **Debug log**
 Run `tuigreet` with the `-d [FILE]` option to log tracing information into the
-specified file, to append here.
+specified file. Before attaching it, inspect the entire log and redact any
+sensitive information, including usernames, filesystem paths, PAM messages, or
+other machine-specific data.

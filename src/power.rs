@@ -116,7 +116,7 @@ pub enum PowerPostAction {
 }
 
 pub async fn run(greeter: &Arc<RwLock<Greeter>>, mut command: Command) -> PowerPostAction {
-  tracing::info!("executing power command: {:?}", command);
+  tracing::info!("executing configured power command");
 
   let text = {
     let mut greeter = greeter.write().await;
@@ -138,7 +138,7 @@ pub async fn run(greeter: &Arc<RwLock<Greeter>>, mut command: Command) -> PowerP
     Err(err) => Some(format!("{}: {err}", text.command_failed)),
   };
 
-  tracing::info!("power command exited with: {:?}", message);
+  tracing::info!("power command completed with an error: {}", message.is_some());
 
   let mode = greeter.read().await.previous_mode;
 

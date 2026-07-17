@@ -26,13 +26,13 @@ async fn remember_username() {
 
     async move {
       runner.wait_until_buffer_contains("Username:").await;
+      runner.wait_until_buffer_contains("Password:").await;
 
       assert!(runner.output().await.contains("Username: apognu"));
       assert!(runner.output().await.contains("Password:"));
 
-      runner.wait_until_buffer_contains("Password:").await;
       runner.send_key(KeyCode::Esc).await;
-      runner.wait_for_render().await;
+      runner.wait_until_buffer_contains("Username: _").await;
 
       assert!(runner.output().await.contains("Username: _"));
       assert!(!runner.output().await.contains("Password:"));

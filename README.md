@@ -13,6 +13,9 @@ Options:
         --config FILE   load an explicit TOML configuration file
         --check-config  show active configuration files, validate them, and
                         exit
+        --ipc-timeout SECONDS
+                        maximum seconds to wait for a greetd response (default:
+                        120)
     -d, --debug [FILE]  enable debug logging to the provided file, or to
                         /tmp/tuigreet.log
     -c, --cmd COMMAND   command to run
@@ -175,6 +178,9 @@ The system configuration and an explicit configuration file, when selected, are 
 See [`contrib/tuigreet.toml`](contrib/tuigreet.toml) for every supported field and its default. Arrays are used for session directories and environment entries, for example:
 
 ```toml
+[general]
+ipc-timeout = 120
+
 [session]
 command = "sway"
 environment = ["XDG_CURRENT_DESKTOP=sway"]

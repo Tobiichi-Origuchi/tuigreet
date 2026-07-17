@@ -5,14 +5,9 @@ use std::{
   fmt::{self, Display},
   path::PathBuf,
   process,
-  sync::Arc,
 };
 
 use getopts::{Matches, Options};
-use tokio::{
-  net::UnixStream,
-  sync::{RwLock, RwLockWriteGuard},
-};
 use tracing_appender::non_blocking::WorkerGuard;
 use zeroize::Zeroize;
 
@@ -31,7 +26,7 @@ use crate::{
     get_sessions,
     get_users,
   },
-  ipc::PendingSession,
+  ipc::AuthState,
   power::PowerOption,
   text::Text,
   ui::{
@@ -234,7 +229,7 @@ pub struct Greeter {
   pub config: Option<Matches>,
   pub settings: Settings,
   pub socket: String,
-  pub stream: Option<Arc<RwLock<UnixStream>>>,
+  pub ipc_timeout: u16,
 
   // Current mode of the application, will define what actions are permitted.
   pub mode: Mode,
@@ -309,12 +304,8 @@ pub struct Greeter {
   pub kb_sessions: u8,
   pub kb_power: u8,
 
-  // The software is waiting for a response from `greetd`.
-  pub working: bool,
-  // We are done working.
-  pub done: bool,
-  // Immutable state captured when the StartSession request is sent.
-  pub(crate) pending_session: Option<PendingSession>,
+  // Explicit state of the current greetd authentication/session transaction.
+  pub(crate) auth_state: AuthState,
   // Should we exit?
   pub exit: Option<AuthStatus>,
 }
@@ -329,7 +320,7 @@ impl Default for Greeter {
       config: None,
       settings: Settings::default(),
       socket: String::new(),
-      stream: None,
+      ipc_timeout: config::DEFAULT_IPC_TIMEOUT,
       mode: Mode::default(),
       previous_mode: Mode::default(),
       cursor_offset: 0,
@@ -363,9 +354,7 @@ impl Default for Greeter {
       kb_command: 2,
       kb_sessions: 3,
       kb_power: 12,
-      working: false,
-      done: false,
-      pending_session: None,
+      auth_state: AuthState::Idle,
       exit: None,
     }
   }
@@ -397,8 +386,6 @@ impl Greeter {
 
         process::exit(1);
       }
-
-      greeter.connect().await;
     }
 
     greeter.logger = match crate::logger::init(greeter.debug, &greeter.logfile) {
@@ -517,6 +504,10 @@ impl Greeter {
 
   // Reset the software to its initial state.
   pub async fn reset(&mut self, soft: bool) {
+    self.reset_local(soft);
+  }
+
+  pub(crate) fn reset_local(&mut self, soft: bool) {
     if soft {
       self.mode = Mode::Password;
       self.previous_mode = Mode::Password;
@@ -525,12 +516,9 @@ impl Greeter {
       self.previous_mode = Mode::Username;
     }
 
-    self.working = false;
-    self.done = false;
-    self.pending_session = None;
+    self.auth_state = AuthState::Idle;
 
     self.scrub(false, soft);
-    self.connect().await;
   }
 
   pub fn open_command_editor(&mut self) {
@@ -558,39 +546,8 @@ impl Greeter {
     }
   }
 
-  // Connect to `greetd` and return a stream we can safely write to.
-  pub async fn connect(&mut self) {
-    if self.mock {
-      tracing::info!("mock mode: skipping greetd socket connection");
-      return;
-    }
-
-    if self.socket.is_empty() {
-      self.socket = match env::var("GREETD_SOCK") {
-        Ok(socket) => socket,
-        Err(_) => {
-          eprintln!("GREETD_SOCK must be defined");
-          process::exit(1);
-        },
-      };
-    }
-
-    match UnixStream::connect(&self.socket).await {
-      Ok(stream) => self.stream = Some(Arc::new(RwLock::new(stream))),
-
-      Err(err) => {
-        eprintln!("{err}");
-        process::exit(1);
-      },
-    }
-  }
-
   pub fn config(&self) -> &Matches {
     self.config.as_ref().unwrap()
-  }
-
-  pub async fn stream(&self) -> RwLockWriteGuard<'_, UnixStream> {
-    self.stream.as_ref().unwrap().write().await
   }
 
   pub fn option(&self, name: &str) -> Option<String> {
@@ -647,6 +604,12 @@ impl Greeter {
       "",
       "check-config",
       "show active configuration files, validate them, and exit",
+    );
+    opts.optopt(
+      "",
+      "ipc-timeout",
+      "maximum seconds to wait for a greetd response (default: 120)",
+      "SECONDS",
     );
     opts.optflagopt(
       "d",
@@ -826,6 +789,7 @@ impl Greeter {
 
     self.debug = settings.debug;
     self.logfile = settings.logfile.clone();
+    self.ipc_timeout = settings.ipc_timeout;
     let theme = settings.theme.specification();
     if !theme.is_empty() {
       self.theme = Theme::parse(&theme);
@@ -949,6 +913,7 @@ impl Greeter {
     self.time = settings.time;
     self.time_format.clone_from(&settings.time_format);
     self.refresh_rate = settings.refresh_rate;
+    self.ipc_timeout = settings.ipc_timeout;
     self.user_menu = settings.user_menu;
     self.user_autocomplete = settings.user_autocomplete;
 
@@ -1914,6 +1879,11 @@ mod test {
         true,
         Some(|greeter| assert_eq!(greeter.refresh_rate, 60)),
       ),
+      (
+        &["--ipc-timeout", "60"],
+        true,
+        Some(|greeter| assert_eq!(greeter.ipc_timeout, 60)),
+      ),
       // Unknown options are ignored
       (&["--asterisk-char", ""], true, None),
       (&["--min-uid", "10000", "--max-uid", "5000"], true, None),
@@ -1930,6 +1900,8 @@ mod test {
       (&["--refresh-rate", "0"], true, None),
       (&["--refresh-rate", "241"], true, None),
       (&["--refresh-rate", "fast"], true, None),
+      (&["--ipc-timeout", "0"], true, None),
+      (&["--ipc-timeout", "3601"], true, None),
       (&["--cmd", "cmd", "--env"], true, None),
       (&["--cmd", "cmd", "--env", "A"], true, None),
     ];

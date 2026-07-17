@@ -25,6 +25,10 @@ tuigreet - A graphical console greeter for greetd
 	and exit. Any syntax, field, type, range, or relationship warning produces a
 	non-zero exit status. Use with *--config FILE* to check an explicit layer.
 
+*--ipc-timeout SECONDS*
+	Set the maximum time to wait for a greetd response. The value must be between
+	1 and 3600 seconds; the default is 120.
+
 *-d, --debug [FILE]*
 	Enables debug logging to the provided FILE path, or to /tmp/tuigreet.log if no
 	file is specified. Logs are appended with mode 0600. FILE must be a regular

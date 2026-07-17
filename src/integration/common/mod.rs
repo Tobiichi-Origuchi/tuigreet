@@ -101,8 +101,6 @@ impl IntegrationRunner {
 
       greeter.logfile = "/tmp/tuigreet.log".to_string();
       greeter.socket = socket_path.to_str().unwrap().to_string();
-      greeter.connect().await;
-
       match crate::run(backend, greeter, events).await {
         Ok(()) => Err("tuigreet returned without an authentication status".to_string()),
         Err(error) => match error.downcast_ref::<AuthStatus>() {

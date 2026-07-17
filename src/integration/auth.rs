@@ -105,6 +105,7 @@ async fn authentication_bad_mfa() {
       runner.wait_until_buffer_contains("Authentication failed").await;
 
       assert!(runner.output().await.contains("Authentication failed"));
+      runner.wait_until_buffer_contains("Password:").await;
       assert!(runner.output().await.contains("Password:"));
     }
   });

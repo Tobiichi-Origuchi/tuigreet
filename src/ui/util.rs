@@ -19,8 +19,7 @@ pub fn buttonize(message: &str) -> String {
 // mode and configuration. Usually, we will show the cursor only when expecting
 // text entries from the user.
 pub fn should_hide_cursor(greeter: &Greeter) -> bool {
-  greeter.working
-    || greeter.done
+  !greeter.auth_state.accepts_input()
     || (greeter.user_menu && greeter.mode == Mode::Username && greeter.username.value.is_empty())
     || (greeter.mode == Mode::Password && greeter.prompt.is_none())
     || greeter.mode == Mode::Users

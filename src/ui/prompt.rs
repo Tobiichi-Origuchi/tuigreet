@@ -113,7 +113,7 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
         );
       }
 
-      let answer_text = if greeter.working {
+      let answer_text = if greeter.auth_state.is_waiting() {
         Span::from(text!(greeter, wait))
       } else {
         prompt_value(theme, greeter.prompt.as_ref())

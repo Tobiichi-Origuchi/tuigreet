@@ -14,6 +14,8 @@ use toml_edit::{Document, Item, Table};
 use crate::event::{DEFAULT_REFRESH_RATE, MAX_REFRESH_RATE};
 
 pub const SYSTEM_CONFIG: &str = "/etc/tuigreet/config.toml";
+pub const DEFAULT_IPC_TIMEOUT: u16 = 120;
+pub const MAX_IPC_TIMEOUT: u16 = 3600;
 const DEFAULT_LOG_FILE: &str = "/tmp/tuigreet.log";
 const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
 
@@ -21,6 +23,7 @@ const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
 pub struct Settings {
   pub debug: bool,
   pub logfile: String,
+  pub ipc_timeout: u16,
   pub command: Option<String>,
   pub allow_command_editor: bool,
   pub environment: Vec<String>,
@@ -64,6 +67,7 @@ impl Default for Settings {
     Self {
       debug: false,
       logfile: DEFAULT_LOG_FILE.into(),
+      ipc_timeout: DEFAULT_IPC_TIMEOUT,
       command: None,
       allow_command_editor: false,
       environment: Vec::new(),
@@ -108,6 +112,7 @@ impl Default for Settings {
 struct Layer {
   debug: Option<bool>,
   logfile: Option<String>,
+  ipc_timeout: Option<u16>,
   command: Option<Option<String>>,
   allow_command_editor: Option<bool>,
   environment: Option<Vec<String>>,
@@ -332,6 +337,7 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
   apply!(
     debug,
     logfile,
+    ipc_timeout,
     command,
     allow_command_editor,
     environment,
@@ -447,6 +453,7 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
   if let Some(path) = string("debug") {
     layer.logfile = Some(path);
   }
+  layer.ipc_timeout = cli_number(matches, "ipc-timeout", 1, MAX_IPC_TIMEOUT, warnings);
   layer.command = string("cmd").map(Some);
   if matches.opt_present("allow-command-editor") && matches.opt_present("no-command-editor") {
     warnings.push(
@@ -553,9 +560,25 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
   let mut layer = Layer::default();
 
   if let Some(table) = read_table(document.as_table(), "general", path, source, warnings) {
-    warn_unknown(table, &["debug", "log-file", "mock"], path, source, warnings, "general");
+    warn_unknown(
+      table,
+      &["debug", "log-file", "ipc-timeout", "mock"],
+      path,
+      source,
+      warnings,
+      "general",
+    );
     layer.debug = read_bool(table, "debug", path, source, warnings, "general");
     layer.logfile = read_string(table, "log-file", path, source, warnings, "general");
+    layer.ipc_timeout = read_u16(
+      table,
+      "ipc-timeout",
+      (1, MAX_IPC_TIMEOUT),
+      path,
+      source,
+      warnings,
+      "general",
+    );
     layer.mock = read_bool(table, "mock", path, source, warnings, "general");
   }
   if let Some(table) = read_table(document.as_table(), "session", path, source, warnings) {

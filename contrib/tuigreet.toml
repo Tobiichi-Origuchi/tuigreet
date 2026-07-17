@@ -11,6 +11,8 @@
 # Private regular-file log destination used when debug is enabled. Symlinks and
 # files with additional hard links are refused. Requires a restart.
 # log-file = "/tmp/tuigreet.log"
+# Maximum time to wait for each greetd response; valid range: 1..=3600 seconds.
+# ipc-timeout = 120
 # Run without greetd for UI testing. Requires a restart.
 # mock = false
 

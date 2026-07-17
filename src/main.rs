@@ -31,7 +31,7 @@ use crossterm::{
   terminal::{LeaveAlternateScreen, disable_raw_mode},
 };
 use event::{Control, Event};
-use greetd_ipc::Request;
+use ipc::AuthState;
 use power::PowerPostAction;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::sync::{RwLock, mpsc};
@@ -84,28 +84,12 @@ where
   let ipc = Ipc::new();
   let has_preselected_user = !greeter.username.value.is_empty();
   if has_preselected_user {
-    greeter.working = true;
+    greeter.auth_state = AuthState::CreatingSession;
   }
   let greeter = Arc::new(RwLock::new(greeter));
 
   #[cfg(not(test))]
   watcher::spawn(config::watched_paths(greeter.read().await.config()), events.sender());
-
-  if has_preselected_user {
-    tracing::info!("creating initial session for preselected user");
-
-    ipc
-      .send(Request::CreateSession {
-        username: greeter.read().await.username.value.clone(),
-      })
-      .await;
-
-    // Resolve the first real greetd prompt before entering the alternate
-    // screen. This keeps the first visible frame at its final height without
-    // guessing whether PAM will ask for a password, MFA token, or other input.
-    let mut initial_ipc = ipc.clone();
-    let _ = initial_ipc.handle(greeter.clone()).await?;
-  }
 
   #[cfg(not(test))]
   {
@@ -120,31 +104,29 @@ where
   let mut cursor_on = true;
 
   let (control_tx, mut control_rx) = mpsc::unbounded_channel();
-
-  tokio::task::spawn({
+  let ipc_actor = tokio::task::spawn({
     let greeter = greeter.clone();
-    let mut ipc = ipc.clone();
+    let ipc = ipc.clone();
+    let renders = events.sender();
 
     async move {
-      loop {
-        match ipc.handle(greeter.clone()).await {
-          Ok(Some(control)) => {
-            if control_tx.send(control).is_err() {
-              break;
-            }
-          },
-          Ok(None) => {},
-          Err(error) => tracing::error!("greetd IPC request failed: {error}"),
-        }
-      }
+      ipc.run(greeter, control_tx, renders).await;
     }
   });
 
-  loop {
+  if has_preselected_user {
+    tracing::info!("creating initial session for preselected user");
+    ipc
+      .send(greetd_ipc::Request::CreateSession {
+        username: greeter.read().await.username.value.clone(),
+      })
+      .await;
+  }
+
+  let exit_status = loop {
     if let Some(status) = greeter.read().await.exit {
       tracing::info!("exiting main loop");
-
-      return Err(status.into());
+      break Some(status);
     }
 
     let control = tokio::select! {
@@ -196,7 +178,7 @@ where
     };
 
     match control {
-      Some(Control::Exit(status)) => crate::exit(&mut *greeter.write().await, status).await,
+      Some(Control::Exit(status)) => crate::exit(&mut *greeter.write().await, status, &ipc).await,
       Some(Control::PowerCommand(command)) => {
         if let PowerPostAction::ClearScreen = power::run(&greeter, *command).await {
           execute!(io::stdout(), Show, LeaveAlternateScreen)?;
@@ -204,22 +186,29 @@ where
           terminal.clear()?;
           disable_raw_mode()?;
 
-          break;
+          break None;
         }
       },
       None => {},
     }
-  }
+  };
 
-  Ok(())
+  ipc.shutdown();
+  if let Err(error) = ipc_actor.await {
+    tracing::error!("greetd IPC actor failed: {error}");
+  }
+  match exit_status {
+    Some(status) => Err(status.into()),
+    None => Ok(()),
+  }
 }
 
-async fn exit(greeter: &mut Greeter, status: AuthStatus) {
+async fn exit(greeter: &mut Greeter, status: AuthStatus, ipc: &Ipc) {
   tracing::info!("preparing exit with status {}", status);
 
   match status {
     AuthStatus::Success => {},
-    AuthStatus::Cancel | AuthStatus::Failure => Ipc::cancel(greeter).await,
+    AuthStatus::Cancel | AuthStatus::Failure => ipc.cancel(greeter),
   }
 
   #[cfg(not(test))]

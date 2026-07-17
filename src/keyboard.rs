@@ -38,7 +38,32 @@ pub async fn handle(
 
   let mut greeter = greeter.write().await;
 
-  if greeter.working {
+  // Debug exits and transaction cancellation must remain available while an
+  // IPC request or PAM module is taking time to respond.
+  #[cfg(debug_assertions)]
+  if let KeyEvent {
+    code: KeyCode::Char(c),
+    modifiers,
+    ..
+  } = input
+    && modifiers.contains(KeyModifiers::CONTROL)
+    && c.eq_ignore_ascii_case(&'x')
+  {
+    return Ok(Some(Control::Exit(crate::AuthStatus::Cancel)));
+  }
+
+  if let KeyEvent { code: KeyCode::Esc, .. } = input {
+    match greeter.mode {
+      Mode::Command => greeter.close_command_editor(),
+      Mode::Users | Mode::Sessions | Mode::Power => greeter.mode = greeter.previous_mode,
+      _ if greeter.auth_state.can_cancel() => ipc.cancel(&mut greeter),
+      _ if greeter.auth_state.accepts_input() => greeter.reset(false).await,
+      _ => {},
+    }
+    return Ok(None);
+  }
+
+  if !greeter.auth_state.accepts_input() {
     return Ok(None);
   }
 
@@ -53,34 +78,6 @@ pub async fn handle(
       Mode::Password => greeter.buffer = String::new(),
       Mode::Command => greeter.command_buffer = String::new(),
       _ => {},
-    },
-
-    // In debug mode only, ^X will exit the application.
-    #[cfg(debug_assertions)]
-    KeyEvent {
-      code: KeyCode::Char(c),
-      modifiers,
-      ..
-    } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'x') => {
-      return Ok(Some(Control::Exit(crate::AuthStatus::Cancel)));
-    },
-
-    // Depending on the active screen, pressing Escape will either return to the
-    // previous mode (close a popup, for example), or cancel the `greetd`
-    // session.
-    KeyEvent { code: KeyCode::Esc, .. } => match greeter.mode {
-      Mode::Command => {
-        greeter.close_command_editor();
-      },
-
-      Mode::Users | Mode::Sessions | Mode::Power => {
-        greeter.mode = greeter.previous_mode;
-      },
-
-      _ => {
-        Ipc::cancel(&mut greeter).await;
-        greeter.reset(false).await;
-      },
     },
 
     // Simple cursor directions in text fields.
@@ -235,7 +232,7 @@ pub async fn handle(
       Mode::Username => {},
 
       Mode::Password => {
-        greeter.working = true;
+        greeter.auth_state = crate::ipc::AuthState::ContinuingAuth;
         greeter.message = None;
 
         ipc
@@ -438,7 +435,7 @@ async fn delete_key(greeter: &mut Greeter, key: KeyCode) {
 
 // Creates a `greetd` session for the provided username.
 async fn validate_username(greeter: &mut Greeter, ipc: &Ipc) {
-  greeter.working = true;
+  greeter.auth_state = crate::ipc::AuthState::CreatingSession;
   greeter.message = None;
 
   ipc
@@ -483,14 +480,19 @@ mod test {
   use std::sync::Arc;
 
   use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-  use tokio::{sync::RwLock, time::Duration};
+  use tokio::sync::RwLock;
+  #[cfg(debug_assertions)]
+  use tokio::time::Duration;
 
   use super::{Completion, common_prefix, complete_username, handle};
+  #[cfg(debug_assertions)]
   use crate::{
     AuthStatus,
+    event::{Control, Events, fill_event_queue},
+  };
+  use crate::{
     Greeter,
     Mode,
-    event::{Control, Events, fill_event_queue},
     ipc::Ipc,
     power::PowerOption,
     ui::{
@@ -617,14 +619,17 @@ mod test {
   }
 
   #[tokio::test]
+  #[cfg(debug_assertions)]
   async fn ctrl_x_does_not_block_on_a_full_event_queue() {
     let events = Events::new().await;
     fill_event_queue(&events);
+    let mut state = Greeter::default();
+    state.auth_state = crate::ipc::AuthState::ContinuingAuth;
 
     let result = tokio::time::timeout(
       Duration::from_millis(100),
       handle(
-        Arc::new(RwLock::new(Greeter::default())),
+        Arc::new(RwLock::new(state)),
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         Ipc::new(),
       ),
@@ -633,6 +638,24 @@ mod test {
     .expect("Ctrl-X blocked on the full render/event queue");
 
     assert!(matches!(result, Ok(Some(Control::Exit(AuthStatus::Cancel)))));
+  }
+
+  #[tokio::test]
+  async fn escape_cancels_a_waiting_authentication_transaction() {
+    let mut state = Greeter::default();
+    state.mode = Mode::Password;
+    state.auth_state = crate::ipc::AuthState::ContinuingAuth;
+    let greeter = Arc::new(RwLock::new(state));
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(greeter.read().await.auth_state, crate::ipc::AuthState::Cancelling);
   }
 
   #[tokio::test]

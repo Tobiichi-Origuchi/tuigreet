@@ -1,3 +1,5 @@
+#![cfg(debug_assertions)]
+
 use crossterm::event::{KeyCode, KeyModifiers};
 use libgreetd_stub::SessionOptions;
 

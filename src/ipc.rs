@@ -1,17 +1,33 @@
-use std::{borrow::Cow, error::Error, io, path::PathBuf, sync::Arc};
+use std::{
+  borrow::Cow,
+  env,
+  error::Error,
+  io,
+  path::PathBuf,
+  sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+  },
+  time::Duration,
+};
 
 use greetd_ipc::{AuthMessageType, ErrorType, Request, Response, codec::TokioCodec};
-use tokio::sync::{
-  Mutex,
-  RwLock,
-  mpsc::{Receiver, Sender},
+use tokio::{
+  net::UnixStream,
+  sync::{
+    Mutex,
+    Notify,
+    RwLock,
+    mpsc::{Receiver, Sender, UnboundedSender},
+  },
+  time::{Instant, sleep, sleep_until, timeout},
 };
 
 use crate::{
   AuthStatus,
   Greeter,
   Mode,
-  event::Control,
+  event::{Control, Event},
   info::{
     delete_last_command,
     delete_last_session,
@@ -30,6 +46,9 @@ use crate::{
   },
 };
 
+const MAX_RECOVERY_ATTEMPTS: u8 = 3;
+const CANCEL_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CachedSession {
   Command(String),
@@ -44,12 +63,55 @@ pub(crate) struct PendingSession {
   selection: CachedSession,
 }
 
-#[derive(Clone, Copy)]
-struct CachePolicy {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CachePolicy {
   remember_username: bool,
   remember_session: bool,
   remember_user_session: bool,
   allow_command_editor: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AuthInput {
+  Secret,
+  Visible,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum AuthState {
+  #[default]
+  Idle,
+  CreatingSession,
+  AwaitingInput(AuthInput),
+  ContinuingAuth,
+  StartingSession(PendingSession, CachePolicy),
+  Cancelling,
+  Started,
+  Failed,
+}
+
+impl AuthState {
+  pub(crate) fn accepts_input(&self) -> bool {
+    matches!(self, Self::Idle | Self::AwaitingInput(_))
+  }
+
+  pub(crate) fn is_waiting(&self) -> bool {
+    matches!(
+      self,
+      Self::CreatingSession | Self::ContinuingAuth | Self::StartingSession(..) | Self::Cancelling
+    )
+  }
+
+  pub(crate) fn can_cancel(&self) -> bool {
+    matches!(
+      self,
+      Self::CreatingSession | Self::AwaitingInput(_) | Self::ContinuingAuth
+    )
+  }
+
+  fn is_live_prestart(&self) -> bool {
+    self.can_cancel() || matches!(self, Self::Cancelling)
+  }
 }
 
 impl CachePolicy {
@@ -133,79 +195,360 @@ fn commit_pending_session(pending: PendingSession, policy: CachePolicy) {
 #[derive(Clone)]
 pub struct Ipc(Arc<IpcHandle>);
 
+struct QueuedRequest {
+  request: Request,
+  generation: u64,
+}
+
 pub struct IpcHandle {
-  tx: RwLock<Sender<Request>>,
-  rx: Mutex<Receiver<Request>>,
+  tx: Sender<QueuedRequest>,
+  rx: Mutex<Receiver<QueuedRequest>>,
+  cancel_generation: AtomicU64,
+  cancel_notify: Notify,
+  shutdown: AtomicBool,
+  shutdown_notify: Notify,
+}
+
+#[derive(Debug)]
+enum TransactionFailure {
+  Cancelled,
+  Shutdown,
+  TimedOut,
+  Transport(String),
 }
 
 impl Ipc {
   pub fn new() -> Ipc {
-    let (tx, rx) = tokio::sync::mpsc::channel::<Request>(10);
+    let (tx, rx) = tokio::sync::mpsc::channel::<QueuedRequest>(10);
 
     Ipc(Arc::new(IpcHandle {
-      tx: RwLock::new(tx),
+      tx,
       rx: Mutex::new(rx),
+      cancel_generation: AtomicU64::new(0),
+      cancel_notify: Notify::new(),
+      shutdown: AtomicBool::new(false),
+      shutdown_notify: Notify::new(),
     }))
   }
 
   pub async fn send(&self, request: Request) {
     tracing::info!("sending request to greetd: {}", request.safe_repr());
 
-    let _ = self.0.tx.read().await.send(request).await;
+    let generation = self.0.cancel_generation.load(Ordering::Acquire);
+    let _ = self.0.tx.send(QueuedRequest { request, generation }).await;
   }
 
-  pub async fn next(&mut self) -> Option<Request> {
+  async fn next_queued(&self) -> Option<QueuedRequest> {
     self.0.rx.lock().await.recv().await
   }
 
-  pub async fn handle(&mut self, greeter: Arc<RwLock<Greeter>>) -> Result<Option<Control>, Box<dyn Error>> {
-    let request = self.next().await;
+  #[cfg(test)]
+  pub async fn next(&self) -> Option<Request> {
+    self.next_queued().await.map(|queued| queued.request)
+  }
 
-    if let Some(request) = request {
-      let (stream, mock) = {
-        let greeter = greeter.read().await;
+  #[cfg(test)]
+  pub async fn handle(&self, greeter: Arc<RwLock<Greeter>>) -> Result<Option<Control>, Box<dyn Error + Send + Sync>> {
+    let Some(queued) = self.next_queued().await else {
+      return Ok(None);
+    };
+    let mut stream = None;
+    let ipc_timeout = Duration::from_secs(u64::from(greeter.read().await.ipc_timeout));
+    let response = self
+      .transact(&greeter, &mut stream, &queued.request, queued.generation, ipc_timeout)
+      .await
+      .map_err(transaction_error)?;
+    self.parse_response(&mut *greeter.write().await, response).await
+  }
 
-        (greeter.stream.as_ref().map(Arc::clone), greeter.mock)
+  pub async fn run(&self, greeter: Arc<RwLock<Greeter>>, controls: UnboundedSender<Control>, renders: Sender<Event>) {
+    let mut stream = None;
+    let mut failures = 0_u8;
+    // A cancellation can be requested immediately after spawning this actor,
+    // before its future is first polled. Start at the initial generation so
+    // that such a request cannot be mistaken for already handled work.
+    let mut observed_generation = 0;
+
+    loop {
+      let queued = tokio::select! {
+        biased;
+        _ = self.wait_for_shutdown() => {
+          self.cancel_stream_if_live(&greeter, &mut stream).await;
+          break;
+        },
+        _ = self.wait_for_cancel(observed_generation) => {
+          observed_generation = self.0.cancel_generation.load(Ordering::Acquire);
+          self.cancel_stream_if_live(&greeter, &mut stream).await;
+          finish_cancellation(&greeter).await;
+          request_render(&renders);
+          continue;
+        },
+        request = self.next_queued() => match request {
+          Some(request) => request,
+          None => break,
+        },
       };
 
-      let response = if let Some(stream) = stream {
-        let mut stream = stream.write().await;
-        request.write_to(&mut *stream).await?;
-        let response = Response::read_from(&mut *stream).await?;
-        drop(stream);
+      if queued.generation != self.0.cancel_generation.load(Ordering::Acquire) {
+        observed_generation = self.0.cancel_generation.load(Ordering::Acquire);
+        self.cancel_stream_if_live(&greeter, &mut stream).await;
+        finish_cancellation(&greeter).await;
+        request_render(&renders);
+        continue;
+      }
 
-        greeter.write().await.working = false;
+      let ipc_timeout = Duration::from_secs(u64::from(greeter.read().await.ipc_timeout));
+      let transaction = self
+        .transact(&greeter, &mut stream, &queued.request, queued.generation, ipc_timeout)
+        .await;
 
-        response
-      } else if mock {
-        greeter.write().await.working = false;
-        mock_response(&request)
-      } else {
-        return Err(io::Error::new(io::ErrorKind::NotConnected, "greetd socket is not connected").into());
-      };
+      match transaction {
+        Ok(response) => {
+          failures = 0;
+          // greetd errors automatically cancel the authentication session.
+          // Reopen the transport before a fresh CreateSession so no daemon or
+          // test implementation can retain stale per-connection PAM state.
+          let session_cancelled = matches!(response, Response::Error { .. });
+          match self.parse_response(&mut *greeter.write().await, response).await {
+            Ok(control) => {
+              if session_cancelled {
+                stream = None;
+              }
+              request_render(&renders);
+              if let Some(control) = control
+                && controls.send(control).is_err()
+              {
+                break;
+              }
+            },
+            Err(error) => {
+              tracing::error!("greetd IPC protocol error: {error}");
+              stream = None;
+              failures = failures.saturating_add(1);
+              if !self
+                .recover(
+                  &greeter,
+                  &renders,
+                  &controls,
+                  &queued.request,
+                  queued.generation,
+                  failures,
+                )
+                .await
+              {
+                break;
+              }
+            },
+          }
+        },
+        Err(TransactionFailure::Cancelled) => {
+          observed_generation = self.0.cancel_generation.load(Ordering::Acquire);
+          finish_cancellation(&greeter).await;
+          request_render(&renders);
+        },
+        Err(TransactionFailure::Shutdown) => {
+          self.cancel_stream_if_live(&greeter, &mut stream).await;
+          break;
+        },
+        Err(error) => {
+          tracing::error!("greetd IPC request failed: {}", transaction_error_message(&error));
+          stream = None;
+          failures = failures.saturating_add(1);
+          if !self
+            .recover(
+              &greeter,
+              &renders,
+              &controls,
+              &queued.request,
+              queued.generation,
+              failures,
+            )
+            .await
+          {
+            break;
+          }
+        },
+      }
+    }
+  }
 
-      return self.parse_response(&mut *greeter.write().await, response).await;
+  async fn transact(
+    &self,
+    greeter: &Arc<RwLock<Greeter>>,
+    stream: &mut Option<UnixStream>,
+    request: &Request,
+    generation: u64,
+    ipc_timeout: Duration,
+  ) -> Result<Response, TransactionFailure> {
+    let mock = greeter.read().await.mock;
+    if mock {
+      if self.cancelled(generation) {
+        return Err(TransactionFailure::Cancelled);
+      }
+      return Ok(mock_response(request));
     }
 
-    Ok(None)
+    if stream.is_none() {
+      let socket = {
+        let configured = greeter.read().await.socket.clone();
+        if configured.is_empty() {
+          env::var("GREETD_SOCK").map_err(|_| TransactionFailure::Transport("GREETD_SOCK must be defined".into()))?
+        } else {
+          configured
+        }
+      };
+      let connect = UnixStream::connect(socket);
+      let connected = tokio::select! {
+        biased;
+        _ = self.wait_for_shutdown() => return Err(TransactionFailure::Shutdown),
+        _ = self.wait_for_cancel(generation) => return Err(TransactionFailure::Cancelled),
+        result = timeout(ipc_timeout, connect) => match result {
+          Ok(Ok(stream)) => stream,
+          Ok(Err(error)) => return Err(TransactionFailure::Transport(error.to_string())),
+          Err(_) => return Err(TransactionFailure::TimedOut),
+        },
+      };
+      *stream = Some(connected);
+    }
+
+    let deadline = Instant::now() + ipc_timeout;
+    let write_result = {
+      let socket = stream.as_mut().expect("connected stream");
+      tokio::select! {
+        biased;
+        _ = self.wait_for_shutdown() => Err(TransactionFailure::Shutdown),
+        _ = self.wait_for_cancel(generation) => Err(TransactionFailure::Cancelled),
+        _ = sleep_until(deadline) => Err(TransactionFailure::TimedOut),
+        result = request.write_to(socket) => result.map_err(|error| TransactionFailure::Transport(error.to_string())),
+      }
+    };
+    if let Err(error) = write_result {
+      *stream = None;
+      return Err(error);
+    }
+
+    let response = {
+      let socket = stream.as_mut().expect("connected stream");
+      tokio::select! {
+        biased;
+        _ = self.wait_for_shutdown() => Err(TransactionFailure::Shutdown),
+        _ = self.wait_for_cancel(generation) => Err(TransactionFailure::Cancelled),
+        _ = sleep_until(deadline) => Err(TransactionFailure::TimedOut),
+        result = Response::read_from(socket) => result.map_err(|error| TransactionFailure::Transport(error.to_string())),
+      }
+    };
+
+    if let Err(TransactionFailure::Cancelled | TransactionFailure::Shutdown) = &response
+      && !matches!(request, Request::StartSession { .. })
+      && let Some(socket) = stream.as_mut()
+    {
+      let _ = timeout(CANCEL_WRITE_TIMEOUT, Request::CancelSession.write_to(socket)).await;
+    }
+    if response.is_err() {
+      *stream = None;
+    }
+    response
+  }
+
+  async fn recover(
+    &self,
+    greeter: &Arc<RwLock<Greeter>>,
+    renders: &Sender<Event>,
+    controls: &UnboundedSender<Control>,
+    request: &Request,
+    generation: u64,
+    failures: u8,
+  ) -> bool {
+    let is_start = matches!(request, Request::StartSession { .. });
+    {
+      let mut greeter = greeter.write().await;
+      greeter.auth_state = AuthState::Failed;
+      greeter.message = Some(text!(greeter, greetd_error));
+    }
+    request_render(renders);
+
+    if is_start || failures >= MAX_RECOVERY_ATTEMPTS {
+      let _ = controls.send(Control::Exit(AuthStatus::Failure));
+      return false;
+    }
+
+    {
+      let mut greeter = greeter.write().await;
+      greeter.reset_local(true);
+      greeter.auth_state = AuthState::CreatingSession;
+    }
+    request_render(renders);
+
+    let delay = Duration::from_millis(250 * u64::from(failures));
+    tokio::select! {
+      biased;
+      _ = self.wait_for_shutdown() => false,
+      _ = self.wait_for_cancel(generation) => {
+        finish_cancellation(greeter).await;
+        request_render(renders);
+        true
+      },
+      _ = sleep(delay) => {
+        let username = greeter.read().await.username.value.clone();
+        self.send(Request::CreateSession { username }).await;
+        true
+      },
+    }
+  }
+
+  async fn cancel_stream_if_live(&self, greeter: &Arc<RwLock<Greeter>>, stream: &mut Option<UnixStream>) {
+    let can_cancel = greeter.read().await.auth_state.is_live_prestart();
+    if can_cancel && let Some(socket) = stream.as_mut() {
+      let _ = timeout(CANCEL_WRITE_TIMEOUT, Request::CancelSession.write_to(socket)).await;
+    }
+    *stream = None;
+  }
+
+  fn cancelled(&self, generation: u64) -> bool {
+    self.0.cancel_generation.load(Ordering::Acquire) != generation
+  }
+
+  async fn wait_for_cancel(&self, generation: u64) {
+    loop {
+      let notified = self.0.cancel_notify.notified();
+      if self.cancelled(generation) {
+        return;
+      }
+      notified.await;
+    }
+  }
+
+  async fn wait_for_shutdown(&self) {
+    loop {
+      let notified = self.0.shutdown_notify.notified();
+      if self.0.shutdown.load(Ordering::Acquire) {
+        return;
+      }
+      notified.await;
+    }
+  }
+
+  pub fn shutdown(&self) {
+    self.0.shutdown.store(true, Ordering::Release);
+    self.0.shutdown_notify.notify_waiters();
   }
 
   async fn parse_response(
-    &mut self,
+    &self,
     greeter: &mut Greeter,
     response: Response,
-  ) -> Result<Option<Control>, Box<dyn Error>> {
+  ) -> Result<Option<Control>, Box<dyn Error + Send + Sync>> {
     self
       .parse_response_with(greeter, response, commit_pending_session)
       .await
   }
 
   async fn parse_response_with<F>(
-    &mut self,
+    &self,
     greeter: &mut Greeter,
     response: Response,
     commit: F,
-  ) -> Result<Option<Control>, Box<dyn Error>>
+  ) -> Result<Option<Control>, Box<dyn Error + Send + Sync>>
   where
     F: FnOnce(PendingSession, CachePolicy),
   {
@@ -221,98 +564,110 @@ impl Ipc {
       Response::AuthMessage {
         auth_message_type,
         auth_message,
-      } => match auth_message_type {
-        AuthMessageType::Secret => {
-          greeter.mode = Mode::Password;
-          greeter.working = false;
-          greeter.asking_for_secret = true;
-          greeter.set_prompt(&auth_message);
-        },
+      } => {
+        if !matches!(
+          greeter.auth_state,
+          AuthState::CreatingSession | AuthState::ContinuingAuth
+        ) {
+          return Err(protocol_error(&greeter.auth_state, "authentication message"));
+        }
 
-        AuthMessageType::Visible => {
-          greeter.mode = Mode::Password;
-          greeter.working = false;
-          greeter.asking_for_secret = false;
-          greeter.set_prompt(&auth_message);
-        },
+        match auth_message_type {
+          AuthMessageType::Secret => {
+            greeter.mode = Mode::Password;
+            greeter.previous_mode = Mode::Password;
+            greeter.asking_for_secret = true;
+            greeter.set_prompt(&auth_message);
+            greeter.auth_state = AuthState::AwaitingInput(AuthInput::Secret);
+          },
 
-        AuthMessageType::Error => {
-          greeter.message = Some(auth_message);
+          AuthMessageType::Visible => {
+            greeter.mode = Mode::Password;
+            greeter.previous_mode = Mode::Password;
+            greeter.asking_for_secret = false;
+            greeter.set_prompt(&auth_message);
+            greeter.auth_state = AuthState::AwaitingInput(AuthInput::Visible);
+          },
 
-          self.send(Request::PostAuthMessageResponse { response: None }).await;
-        },
+          AuthMessageType::Error => {
+            greeter.message = Some(auth_message);
+            greeter.auth_state = AuthState::ContinuingAuth;
 
-        AuthMessageType::Info => {
-          greeter.remove_prompt();
+            self.send(Request::PostAuthMessageResponse { response: None }).await;
+          },
 
-          greeter.previous_mode = greeter.mode;
-          greeter.mode = Mode::Action;
+          AuthMessageType::Info => {
+            greeter.remove_prompt();
 
-          if let Some(message) = &mut greeter.message {
-            message.push('\n');
-            message.push_str(auth_message.trim_end());
-          } else {
-            greeter.message = Some(auth_message.trim_end().to_string());
-          }
+            greeter.previous_mode = greeter.mode;
+            greeter.mode = Mode::Action;
 
-          self.send(Request::PostAuthMessageResponse { response: None }).await;
-        },
+            if let Some(message) = &mut greeter.message {
+              message.push('\n');
+              message.push_str(auth_message.trim_end());
+            } else {
+              greeter.message = Some(auth_message.trim_end().to_string());
+            }
+
+            greeter.auth_state = AuthState::ContinuingAuth;
+            self.send(Request::PostAuthMessageResponse { response: None }).await;
+          },
+        }
       },
 
       Response::Success => {
-        if greeter.done {
+        let state = std::mem::take(&mut greeter.auth_state);
+        if let AuthState::StartingSession(pending, policy) = state {
           tracing::info!("greetd acknowledged session start, exiting");
-
-          if let Some(pending) = greeter.pending_session.take() {
-            commit(pending, CachePolicy::current(greeter));
-          } else {
-            tracing::warn!("session start was acknowledged without a pending session snapshot");
-          }
-
+          commit(pending, policy);
+          greeter.auth_state = AuthState::Started;
           control = Some(Control::Exit(AuthStatus::Success));
+          return Ok(control);
+        }
+        if !matches!(state, AuthState::CreatingSession | AuthState::ContinuingAuth) {
+          greeter.auth_state = state;
+          return Err(protocol_error(&greeter.auth_state, "success"));
+        }
+        greeter.auth_state = state;
+
+        tracing::info!("authentication successful, starting session");
+
+        let command = if !greeter.allow_command_editor && matches!(&greeter.session_source, SessionSource::Command(_)) {
+          tracing::warn!("refusing a free-form session command because the command editor is disabled");
+          None
         } else {
-          tracing::info!("authentication successful, starting session");
+          greeter.session_source.command(greeter).map(str::to_string)
+        };
 
-          let command = if !greeter.allow_command_editor && matches!(&greeter.session_source, SessionSource::Command(_))
-          {
-            tracing::warn!("refusing a free-form session command because the command editor is disabled");
-            None
-          } else {
-            greeter.session_source.command(greeter).map(str::to_string)
-          };
+        match command {
+          None => {
+            greeter.message = Some(text!(greeter, command_missing));
+            self.cancel(greeter);
+          },
 
-          match command {
-            None => {
-              Ipc::cancel(greeter).await;
+          Some(command) if command.trim().is_empty() => {
+            greeter.message = Some(text!(greeter, command_missing));
+            self.cancel(greeter);
+          },
 
-              greeter.message = Some(text!(greeter, command_missing));
-              greeter.reset(false).await;
-            },
+          Some(command) => {
+            greeter.mode = Mode::Processing;
 
-            Some(command) if command.is_empty() => {
-              Ipc::cancel(greeter).await;
+            let session = Session::get_selected(greeter);
+            let default = DefaultCommand(&command, greeter.session_source.env());
+            let (command, env) = wrap_session_command(greeter, session, &default);
+            let command = command.to_string();
+            let pending = PendingSession::capture(greeter);
+            let policy = CachePolicy::current(greeter);
+            greeter.auth_state = AuthState::StartingSession(pending, policy);
 
-              greeter.message = Some(text!(greeter, command_missing));
-              greeter.reset(false).await;
-            },
-
-            Some(command) => {
-              greeter.done = true;
-              greeter.mode = Mode::Processing;
-
-              let session = Session::get_selected(greeter);
-              let default = DefaultCommand(&command, greeter.session_source.env());
-              let (command, env) = wrap_session_command(greeter, session, &default);
-              greeter.pending_session = Some(PendingSession::capture(greeter));
-
-              self
-                .send(Request::StartSession {
-                  cmd: vec![command.to_string()],
-                  env,
-                })
-                .await;
-            },
-          }
+            self
+              .send(Request::StartSession {
+                cmd: vec![command],
+                env,
+              })
+              .await;
+          },
         }
       },
 
@@ -320,23 +675,29 @@ impl Ipc {
         // Do not display actual message from greetd, which may contain entered information, sometimes passwords.
         tracing::info!("received an error from greetd: {error_type:?}");
 
-        Ipc::cancel(greeter).await;
+        if !matches!(
+          greeter.auth_state,
+          AuthState::CreatingSession | AuthState::ContinuingAuth | AuthState::StartingSession(..)
+        ) {
+          return Err(protocol_error(&greeter.auth_state, "error"));
+        }
 
         match error_type {
           ErrorType::AuthError => {
+            greeter.reset_local(true);
             greeter.message = Some(text!(greeter, failed));
+            greeter.auth_state = AuthState::CreatingSession;
             self
               .send(Request::CreateSession {
                 username: greeter.username.value.clone(),
               })
               .await;
-            greeter.reset(true).await;
           },
 
           ErrorType::Error => {
             // Do not display actual message from greetd, which may contain entered information, sometimes passwords.
+            greeter.reset_local(false);
             greeter.message = Some(text!(greeter, greetd_error));
-            greeter.reset(false).await;
           },
         }
       },
@@ -345,15 +706,48 @@ impl Ipc {
     Ok(control)
   }
 
-  pub async fn cancel(greeter: &mut Greeter) {
-    tracing::info!("cancelling session");
-
-    if greeter.mock {
+  pub fn cancel(&self, greeter: &mut Greeter) {
+    if !greeter.auth_state.can_cancel() {
+      tracing::debug!("ignoring cancellation without a live pre-start transaction");
       return;
     }
 
-    let _ = Request::CancelSession.write_to(&mut *greeter.stream().await).await;
+    tracing::info!("cancelling session");
+    greeter.auth_state = AuthState::Cancelling;
+    self.0.cancel_generation.fetch_add(1, Ordering::AcqRel);
+    self.0.cancel_notify.notify_waiters();
   }
+}
+
+async fn finish_cancellation(greeter: &Arc<RwLock<Greeter>>) {
+  let mut greeter = greeter.write().await;
+  greeter.reset_local(false);
+}
+
+fn request_render(renders: &Sender<Event>) {
+  let _ = renders.try_send(Event::Render);
+}
+
+#[cfg(test)]
+fn transaction_error(error: TransactionFailure) -> Box<dyn Error + Send + Sync> {
+  io::Error::other(transaction_error_message(&error)).into()
+}
+
+fn transaction_error_message(error: &TransactionFailure) -> String {
+  match error {
+    TransactionFailure::Cancelled => "greetd IPC request was cancelled".into(),
+    TransactionFailure::Shutdown => "greetd IPC actor is shutting down".into(),
+    TransactionFailure::TimedOut => "greetd IPC request timed out".into(),
+    TransactionFailure::Transport(error) => error.clone(),
+  }
+}
+
+fn protocol_error(state: &AuthState, response: &str) -> Box<dyn Error + Send + Sync> {
+  io::Error::new(
+    io::ErrorKind::InvalidData,
+    format!("greetd returned {response} while client state was {state:?}"),
+  )
+  .into()
 }
 
 fn mock_response(request: &Request) -> Response {
@@ -443,10 +837,20 @@ fn wrap_session_command<'a>(
 mod test {
   use std::{path::PathBuf, sync::Arc, time::Duration};
 
-  use greetd_ipc::{AuthMessageType, ErrorType, Request, Response};
+  use greetd_ipc::{AuthMessageType, ErrorType, Request, Response, codec::TokioCodec};
   use tokio::sync::RwLock;
 
-  use super::{CachedSession, Ipc, mock_response, wrap_session_command};
+  use super::{
+    AuthInput,
+    AuthState,
+    CachePolicy,
+    CachedSession,
+    Ipc,
+    PendingSession,
+    TransactionFailure,
+    mock_response,
+    wrap_session_command,
+  };
   use crate::{
     Greeter,
     Mode,
@@ -482,8 +886,9 @@ mod test {
   async fn mock_ipc_does_not_require_a_socket() {
     let mut state = Greeter::default();
     state.mock = true;
+    state.auth_state = AuthState::CreatingSession;
     let greeter = Arc::new(RwLock::new(state));
-    let mut ipc = Ipc::new();
+    let ipc = Ipc::new();
 
     ipc
       .send(Request::CreateSession {
@@ -496,6 +901,177 @@ mod test {
     assert_eq!(greeter.mode, Mode::Password);
     assert!(greeter.asking_for_secret);
     assert_eq!(greeter.prompt.as_deref(), Some("Password: "));
+    assert_eq!(greeter.auth_state, AuthState::AwaitingInput(AuthInput::Secret));
+  }
+
+  #[tokio::test]
+  async fn protocol_state_tracks_visible_and_automatic_messages() {
+    let mut greeter = Greeter::default();
+    greeter.auth_state = AuthState::CreatingSession;
+    let ipc = Ipc::new();
+
+    ipc
+      .parse_response(&mut greeter, Response::AuthMessage {
+        auth_message_type: AuthMessageType::Visible,
+        auth_message: "One-time code: ".into(),
+      })
+      .await
+      .unwrap();
+    assert_eq!(greeter.auth_state, AuthState::AwaitingInput(AuthInput::Visible));
+    assert!(!greeter.asking_for_secret);
+
+    greeter.auth_state = AuthState::ContinuingAuth;
+    ipc
+      .parse_response(&mut greeter, Response::AuthMessage {
+        auth_message_type: AuthMessageType::Info,
+        auth_message: "Touch your security key".into(),
+      })
+      .await
+      .unwrap();
+    assert_eq!(greeter.auth_state, AuthState::ContinuingAuth);
+    assert!(matches!(
+      ipc.next().await,
+      Some(Request::PostAuthMessageResponse { response: None })
+    ));
+  }
+
+  #[tokio::test]
+  async fn greetd_errors_obey_the_automatic_cancel_contract() {
+    let mut greeter = Greeter::default();
+    greeter.username.value = "alice".into();
+    greeter.auth_state = AuthState::ContinuingAuth;
+    let ipc = Ipc::new();
+
+    ipc
+      .parse_response(&mut greeter, Response::Error {
+        error_type: ErrorType::AuthError,
+        description: "redacted".into(),
+      })
+      .await
+      .unwrap();
+
+    assert_eq!(greeter.auth_state, AuthState::CreatingSession);
+    assert!(matches!(
+      ipc.next().await,
+      Some(Request::CreateSession { username }) if username == "alice"
+    ));
+  }
+
+  #[tokio::test]
+  async fn unexpected_protocol_messages_are_rejected() {
+    let mut greeter = Greeter::default();
+    let ipc = Ipc::new();
+
+    let error = ipc
+      .parse_response(&mut greeter, Response::AuthMessage {
+        auth_message_type: AuthMessageType::Secret,
+        auth_message: "Password: ".into(),
+      })
+      .await
+      .err()
+      .expect("unexpected protocol message was accepted");
+
+    assert!(error.to_string().contains("client state was Idle"));
+  }
+
+  #[tokio::test]
+  async fn cancellation_is_available_while_waiting_for_greetd() {
+    let events = Events::new().await;
+    let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut state = Greeter::default();
+    state.mock = true;
+    state.auth_state = AuthState::CreatingSession;
+    let greeter = Arc::new(RwLock::new(state));
+    let ipc = Ipc::new();
+    let actor = tokio::spawn({
+      let ipc = ipc.clone();
+      let greeter = greeter.clone();
+      let renders = events.sender();
+      async move { ipc.run(greeter, control_tx, renders).await }
+    });
+
+    ipc.cancel(&mut *greeter.write().await);
+    tokio::time::timeout(Duration::from_millis(100), async {
+      loop {
+        if greeter.read().await.auth_state == AuthState::Idle {
+          break;
+        }
+        tokio::task::yield_now().await;
+      }
+    })
+    .await
+    .expect("IPC cancellation did not restore an interactive state");
+
+    ipc.shutdown();
+    actor.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn response_timeout_closes_the_uncertain_connection() {
+    let (client, _server) = tokio::net::UnixStream::pair().unwrap();
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    let ipc = Ipc::new();
+    let mut stream = Some(client);
+
+    let result = ipc
+      .transact(
+        &greeter,
+        &mut stream,
+        &Request::CreateSession {
+          username: "alice".into(),
+        },
+        0,
+        Duration::from_millis(20),
+      )
+      .await;
+
+    assert!(matches!(result, Err(TransactionFailure::TimedOut)));
+    assert!(stream.is_none());
+  }
+
+  #[tokio::test]
+  async fn active_cancellation_sends_cancel_and_drops_the_connection() {
+    let (client, mut server) = tokio::net::UnixStream::pair().unwrap();
+    let mut state = Greeter::default();
+    state.auth_state = AuthState::CreatingSession;
+    let greeter = Arc::new(RwLock::new(state));
+    let ipc = Ipc::new();
+    let transaction = tokio::spawn({
+      let ipc = ipc.clone();
+      let greeter = greeter.clone();
+      async move {
+        let mut stream = Some(client);
+        let result = ipc
+          .transact(
+            &greeter,
+            &mut stream,
+            &Request::CreateSession {
+              username: "alice".into(),
+            },
+            0,
+            Duration::from_secs(1),
+          )
+          .await;
+        (result, stream)
+      }
+    });
+
+    assert!(matches!(
+      Request::read_from(&mut server).await.unwrap(),
+      Request::CreateSession { .. }
+    ));
+    ipc.cancel(&mut *greeter.write().await);
+    assert!(matches!(
+      tokio::time::timeout(Duration::from_millis(100), Request::read_from(&mut server))
+        .await
+        .expect("CancelSession was not written")
+        .unwrap(),
+      Request::CancelSession
+    ));
+
+    let (result, stream) = transaction.await.unwrap();
+    assert!(matches!(result, Err(TransactionFailure::Cancelled)));
+    assert!(stream.is_none());
   }
 
   #[tokio::test]
@@ -505,14 +1081,17 @@ mod test {
 
     let mut state = Greeter::default();
     state.mock = true;
-    state.done = true;
-    state.pending_session = Some(super::PendingSession {
-      username: "test".into(),
-      display_name: None,
-      selection: CachedSession::None,
-    });
+    let policy = CachePolicy::current(&state);
+    state.auth_state = AuthState::StartingSession(
+      PendingSession {
+        username: "test".into(),
+        display_name: None,
+        selection: CachedSession::None,
+      },
+      policy,
+    );
     let greeter = Arc::new(RwLock::new(state));
-    let mut ipc = Ipc::new();
+    let ipc = Ipc::new();
     ipc
       .send(Request::StartSession {
         cmd: vec!["true".into()],
@@ -531,7 +1110,7 @@ mod test {
   #[tokio::test]
   async fn missing_socket_is_not_implicitly_mocked() {
     let greeter = Arc::new(RwLock::new(Greeter::default()));
-    let mut ipc = Ipc::new();
+    let ipc = Ipc::new();
 
     ipc.send(Request::CancelSession).await;
 
@@ -547,7 +1126,8 @@ mod test {
     greeter.remember_session = true;
     greeter.username = MaskedString::from("original-user".into(), Some("Original User".into()));
     greeter.session_source = SessionSource::Command("original-command".into());
-    let mut ipc = Ipc::new();
+    greeter.auth_state = AuthState::CreatingSession;
+    let ipc = Ipc::new();
     let committed = Arc::new(std::sync::Mutex::new(Vec::new()));
 
     ipc
@@ -569,8 +1149,7 @@ mod test {
       .unwrap();
 
     assert!(committed.lock().unwrap().is_empty());
-    assert!(greeter.done);
-    assert!(greeter.pending_session.is_some());
+    assert!(matches!(greeter.auth_state, AuthState::StartingSession(..)));
 
     greeter.username = MaskedString::from("changed-user".into(), None);
     greeter.session_source = SessionSource::Command("changed-command".into());
@@ -605,8 +1184,8 @@ mod test {
       &committed[0].0.selection,
       &CachedSession::Command("original-command".into())
     );
-    assert_eq!(committed[0].1, (false, false, true, false));
-    assert!(greeter.pending_session.is_none());
+    assert_eq!(committed[0].1, (true, true, false, true));
+    assert_eq!(greeter.auth_state, AuthState::Started);
   }
 
   #[tokio::test]
@@ -614,7 +1193,8 @@ mod test {
     let mut greeter = Greeter::default();
     greeter.mock = true;
     greeter.session_source = SessionSource::DefaultCommand("actual-session --flag".into(), None);
-    let mut ipc = Ipc::new();
+    greeter.auth_state = AuthState::CreatingSession;
+    let ipc = Ipc::new();
 
     ipc
       .parse_response_with(&mut greeter, Response::Success, |_, _| unreachable!())
@@ -634,14 +1214,15 @@ mod test {
     greeter.allow_command_editor = true;
     greeter.remember_session = true;
     greeter.session_source = SessionSource::Command("do-not-cache".into());
-    let mut ipc = Ipc::new();
+    greeter.auth_state = AuthState::CreatingSession;
+    let ipc = Ipc::new();
     let commits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     ipc
       .parse_response_with(&mut greeter, Response::Success, |_, _| unreachable!())
       .await
       .unwrap();
-    assert!(greeter.pending_session.is_some());
+    assert!(matches!(greeter.auth_state, AuthState::StartingSession(..)));
 
     ipc
       .parse_response_with(
@@ -661,8 +1242,7 @@ mod test {
       .unwrap();
 
     assert_eq!(commits.load(std::sync::atomic::Ordering::Relaxed), 0);
-    assert!(greeter.pending_session.is_none());
-    assert!(!greeter.done);
+    assert_eq!(greeter.auth_state, AuthState::Idle);
   }
 
   #[tokio::test]
@@ -670,15 +1250,15 @@ mod test {
     let mut greeter = Greeter::default();
     greeter.mock = true;
     greeter.session_source = SessionSource::Command("untrusted-command".into());
-    let mut ipc = Ipc::new();
+    greeter.auth_state = AuthState::CreatingSession;
+    let ipc = Ipc::new();
 
     ipc
       .parse_response_with(&mut greeter, Response::Success, |_, _| unreachable!())
       .await
       .unwrap();
 
-    assert!(!greeter.done);
-    assert!(greeter.pending_session.is_none());
+    assert_eq!(greeter.auth_state, AuthState::Cancelling);
     assert_eq!(greeter.mode, Mode::Username);
   }
 

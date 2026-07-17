@@ -97,6 +97,26 @@ verify_remote_assets() {
   done
 }
 
+latest_flag() {
+  local repository=$1
+  local version=$2
+  local latest
+
+  latest=$(
+    gh api --paginate "repos/$repository/releases?per_page=100" \
+      --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' |
+      awk '/^[0-9]+\.[0-9]+\.[0-9]+$/' |
+      sort --version-sort |
+      tail -n 1
+  )
+
+  if [[ -z $latest ]] || [[ $(printf '%s\n' "$latest" "$version" | sort --version-sort | tail -n 1) == "$version" ]]; then
+    printf '%s\n' --latest
+  else
+    printf '%s\n' --latest=false
+  fi
+}
+
 publish_version() {
   [[ $# -eq 5 ]] || usage
 
@@ -105,11 +125,12 @@ publish_version() {
   local sha=$3
   local notes_file=$4
   local directory=$5
-  local release_json draft assets name digest local_digest
+  local release_json draft assets name digest local_digest release_latest
   local -a expected=()
 
   validate_local_assets "$version" "$directory"
   mapfile -t expected < <(expected_assets "$version")
+  release_latest=$(latest_flag "$repository" "$version")
 
   if gh release view "$version" --repo "$repository" >/dev/null 2>&1; then
     release_json=$(gh release view "$version" --repo "$repository" --json tagName,isDraft,isPrerelease)
@@ -150,11 +171,11 @@ publish_version() {
 
     verify_remote_assets "$repository" "$version" "$version" "$directory"
     gh release edit "$version" --repo "$repository" --verify-tag --title "$version" \
-      --notes-file "$notes_file" --draft=false --prerelease=false --latest
+      --notes-file "$notes_file" --draft=false --prerelease=false "$release_latest"
   else
     verify_remote_assets "$repository" "$version" "$version" "$directory"
     gh release edit "$version" --repo "$repository" --verify-tag --title "$version" \
-      --notes-file "$notes_file" --prerelease=false --latest
+      --notes-file "$notes_file" --prerelease=false "$release_latest"
   fi
 
   local expected_body remote_body

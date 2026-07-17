@@ -6,7 +6,7 @@ use std::{fs, process::Command};
 
 use tempfile::TempDir;
 
-const PACKAGE_VERSION: &str = "0.10.1";
+const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[test]
 fn exact_tag_uses_the_package_version_shape() {
@@ -26,7 +26,7 @@ fn commit_after_tag_includes_the_distance_and_commit() {
   git(repository.path(), ["commit", "--quiet", "--allow-empty", "-m", "next"]);
 
   let version = build_version::resolve(repository.path(), PACKAGE_VERSION);
-  assert!(version.starts_with("0.10.1.r1.g"), "{version}");
+  assert!(version.starts_with(&format!("{PACKAGE_VERSION}.r1.g")), "{version}");
   assert!(!version.ends_with(".dirty"), "{version}");
 }
 
@@ -47,8 +47,9 @@ fn repository_without_tags_has_a_nonempty_development_version() {
   let repository = repository();
 
   let version = build_version::resolve(repository.path(), PACKAGE_VERSION);
-  assert!(version.starts_with("0.10.1.dev.g"), "{version}");
-  assert!(version.len() > "0.10.1.dev.g".len(), "{version}");
+  let prefix = format!("{PACKAGE_VERSION}.dev.g");
+  assert!(version.starts_with(&prefix), "{version}");
+  assert!(version.len() > prefix.len(), "{version}");
 }
 
 #[test]

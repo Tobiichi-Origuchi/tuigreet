@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.10.2 - 2026-07-17
+
+### Added
+
+- [`46bf09c`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/46bf09c3d65541c0e507948a6791159b3fe1c0c3) Add CLI and TOML controls for explicitly enabling or disabling the legacy F2 command editor.
+
+### Changed
+
+- [`46bf09c`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/46bf09c3d65541c0e507948a6791159b3fe1c0c3) Disable the unauthenticated F2 arbitrary-command editor by default; session commands now come from administrator configuration or installed sessions unless explicitly enabled.
+
+### Fixed
+
+- [`99edd90`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/99edd900e1f690360076c1915687fcc50e0fb7eb) Exclude the executable name from option parsing, removing the spurious `unexpected positional argument 'tuigreet'` warning.
+- [`46bf09c`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/46bf09c3d65541c0e507948a6791159b3fe1c0c3) Update remembered usernames and sessions only after greetd confirms the exact submitted session started; failed or cancelled attempts no longer change the cache.
+- [`7786e54`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/7786e5435ae8c1cdf8ded69b3489414232ca87bd) Keep `--version` nonempty and current for release tags, development commits, dirty trees, shallow clones, and source archives.
+- [`f4f3a06`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/f4f3a06276f318c5eaba94f94eca1608b05609ed) Preserve unrelated valid options when duplicate, unknown, malformed, positional, or non-UTF-8 command-line arguments are ignored.
+- [`003d741`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/003d741b3c427a0a5777505f7c04eb109b50f4ea) Prevent authentication success and real or mock power actions from deadlocking behind a full render/event queue.
+
+### Security
+
+- [`c5d3ab8`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/c5d3ab806d0d74ee28ebe6717ba296e9ede1327b) Write debug logs only to private regular files, reject unsafe links and special files, and redact session commands and environment values.
+
 ## 0.10.1 - 2026-07-15
 
 ### Added

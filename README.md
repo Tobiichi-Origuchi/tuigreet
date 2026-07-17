@@ -152,6 +152,7 @@ All builds, lints, and tests use the stable toolchain declared in `rust-toolchai
 ```sh
 rustup toolchain install nightly-2026-07-15 --profile minimal --component rustfmt
 cargo +nightly-2026-07-15 fmt --all --check
+taplo fmt --check Cargo.toml .taplo.toml Cross.toml rust-toolchain.toml
 ```
 
 If you intend to run the whole test suite, you will need to perform some setup. One of our features uses NSS to list and filter existing users on the system, and in order not to rely on actual users being created on the host, we use [libnss_wrapper](https://cwrap.org/nss_wrapper.html) to mock responses from NSS. Without this, the tests would use the real user list from your system and probably fail because it cannot find the one it looks for.

@@ -1,6 +1,5 @@
 use std::error::Error;
 
-use rand::{RngExt, SeedableRng, prelude::StdRng};
 use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
   text::Span,
@@ -20,6 +19,10 @@ use crate::{
 const GREETING_INDEX: usize = 0;
 const USERNAME_INDEX: usize = 1;
 const ANSWER_INDEX: usize = 3;
+
+fn mask_secret(pool: &str, length: usize) -> String {
+  pool.chars().cycle().take(length).collect()
+}
 
 pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn Error>> {
   let theme = &greeter.theme;
@@ -121,19 +124,7 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
 
         if !greeter.asking_for_secret || greeter.secret_display.show() {
           let value = match (greeter.asking_for_secret, &greeter.secret_display) {
-            (true, SecretDisplay::Character(pool)) => {
-              if pool.chars().count() == 1 {
-                pool.repeat(greeter.buffer.chars().count())
-              } else {
-                let mut rng = StdRng::seed_from_u64(0);
-
-                greeter
-                  .buffer
-                  .chars()
-                  .map(|_| pool.chars().nth(rng.random_range(0..pool.chars().count())).unwrap())
-                  .collect()
-              }
-            },
+            (true, SecretDisplay::Character(pool)) => mask_secret(pool, greeter.buffer.chars().count()),
 
             _ => greeter.buffer.clone(),
           };
@@ -192,5 +183,23 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
     },
 
     _ => Ok((1, 1)),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::mask_secret;
+
+  #[test]
+  fn secret_mask_cycles_configured_characters() {
+    assert_eq!(mask_secret("*", 4), "****");
+    assert_eq!(mask_secret("ab", 5), "ababa");
+    assert_eq!(mask_secret("●○", 3), "●○●");
+  }
+
+  #[test]
+  fn empty_secret_mask_is_safe() {
+    assert_eq!(mask_secret("", 4), "");
+    assert_eq!(mask_secret("*", 0), "");
   }
 }

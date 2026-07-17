@@ -51,7 +51,7 @@ pub async fn handle(
     } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'u') => match greeter.mode {
       Mode::Username => greeter.username = MaskedString::default(),
       Mode::Password => greeter.buffer = String::new(),
-      Mode::Command => greeter.buffer = String::new(),
+      Mode::Command => greeter.command_buffer = String::new(),
       _ => {},
     },
 
@@ -70,9 +70,7 @@ pub async fn handle(
     // session.
     KeyEvent { code: KeyCode::Esc, .. } => match greeter.mode {
       Mode::Command => {
-        greeter.mode = greeter.previous_mode;
-        greeter.buffer = greeter.previous_buffer.take().unwrap_or_default();
-        greeter.cursor_offset = 0;
+        greeter.close_command_editor();
       },
 
       Mode::Users | Mode::Sessions | Mode::Power => {
@@ -99,20 +97,7 @@ pub async fn handle(
     KeyEvent {
       code: KeyCode::F(i), ..
     } if i == greeter.kb_command && greeter.allow_command_editor => {
-      greeter.previous_mode = match greeter.mode {
-        Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => greeter.previous_mode,
-        _ => greeter.mode,
-      };
-
-      // Set the edition buffer to the current command.
-      greeter.previous_buffer = Some(greeter.buffer.clone());
-      greeter.buffer = greeter
-        .session_source
-        .command(&greeter)
-        .map(str::to_string)
-        .unwrap_or_default();
-      greeter.cursor_offset = 0;
-      greeter.mode = Mode::Command;
+      greeter.open_command_editor();
     },
 
     // F3 will display the session selection menu. If we are already in one of
@@ -125,6 +110,10 @@ pub async fn handle(
         Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => greeter.previous_mode,
         _ => greeter.mode,
       };
+
+      if greeter.mode == Mode::Command {
+        greeter.close_command_editor();
+      }
 
       greeter.mode = Mode::Sessions;
     },
@@ -139,6 +128,10 @@ pub async fn handle(
         Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => greeter.previous_mode,
         _ => greeter.mode,
       };
+
+      if greeter.mode == Mode::Command {
+        greeter.close_command_editor();
+      }
 
       greeter.mode = Mode::Power;
     },
@@ -196,6 +189,7 @@ pub async fn handle(
       let value = {
         match greeter.mode {
           Mode::Username => &greeter.username.value,
+          Mode::Command => &greeter.command_buffer,
           _ => &greeter.buffer,
         }
       };
@@ -235,7 +229,6 @@ pub async fn handle(
           _ => greeter.mode,
         };
 
-        greeter.buffer = greeter.previous_buffer.take().unwrap_or_default();
         greeter.mode = Mode::Users;
       },
 
@@ -256,16 +249,13 @@ pub async fn handle(
 
       Mode::Command if greeter.allow_command_editor => {
         greeter.sessions.selected = 0;
-        greeter.session_source = SessionSource::Command(greeter.buffer.clone());
+        greeter.session_source = SessionSource::Command(greeter.command_buffer.clone());
 
-        greeter.buffer = greeter.previous_buffer.take().unwrap_or_default();
-        greeter.mode = greeter.previous_mode;
+        greeter.close_command_editor();
       },
 
       Mode::Command => {
-        greeter.buffer = greeter.previous_buffer.take().unwrap_or_default();
-        greeter.cursor_offset = 0;
-        greeter.mode = greeter.previous_mode;
+        greeter.close_command_editor();
       },
 
       Mode::Users => {
@@ -391,7 +381,7 @@ async fn insert_key(greeter: &mut Greeter, c: char) {
   let value = match greeter.mode {
     Mode::Username => &greeter.username.value,
     Mode::Password => &greeter.buffer,
-    Mode::Command => &greeter.buffer,
+    Mode::Command => &greeter.command_buffer,
     _ => return,
   };
 
@@ -405,7 +395,7 @@ async fn insert_key(greeter: &mut Greeter, c: char) {
   match mode {
     Mode::Username => greeter.username.value = value,
     Mode::Password => greeter.buffer = value,
-    Mode::Command => greeter.buffer = value,
+    Mode::Command => greeter.command_buffer = value,
     _ => {},
   };
 }
@@ -417,7 +407,7 @@ async fn delete_key(greeter: &mut Greeter, key: KeyCode) {
   let value = match greeter.mode {
     Mode::Username => &greeter.username.value,
     Mode::Password => &greeter.buffer,
-    Mode::Command => &greeter.buffer,
+    Mode::Command => &greeter.command_buffer,
     _ => return,
   };
 
@@ -436,7 +426,7 @@ async fn delete_key(greeter: &mut Greeter, key: KeyCode) {
     match greeter.mode {
       Mode::Username => greeter.username.value = value,
       Mode::Password => greeter.buffer = value,
-      Mode::Command => greeter.buffer = value,
+      Mode::Command => greeter.command_buffer = value,
       _ => return,
     };
 
@@ -692,7 +682,7 @@ mod test {
     {
       let mut greeter = greeter.write().await;
       greeter.mode = Mode::Command;
-      greeter.buffer = "newcommand".to_string();
+      greeter.command_buffer = "newcommand".to_string();
     }
 
     let result = handle(
@@ -706,7 +696,7 @@ mod test {
       let status = greeter.read().await;
 
       assert!(result.is_ok());
-      assert_eq!(status.buffer, "".to_string());
+      assert_eq!(status.command_buffer, "".to_string());
     }
   }
 
@@ -718,8 +708,8 @@ mod test {
       let mut greeter = greeter.write().await;
       greeter.previous_mode = Mode::Username;
       greeter.mode = Mode::Command;
-      greeter.previous_buffer = Some("apognu".to_string());
-      greeter.buffer = "newcommand".to_string();
+      greeter.buffer = "password".to_string();
+      greeter.command_buffer = "newcommand".to_string();
       greeter.cursor_offset = 2;
     }
 
@@ -735,8 +725,8 @@ mod test {
 
       assert!(result.is_ok());
       assert_eq!(status.mode, Mode::Username);
-      assert_eq!(status.buffer, "apognu".to_string());
-      assert!(status.previous_buffer.is_none());
+      assert_eq!(status.buffer, "password".to_string());
+      assert!(status.command_buffer.is_empty());
       assert_eq!(status.cursor_offset, 0);
     }
 
@@ -826,8 +816,8 @@ mod test {
 
       assert!(result.is_ok());
       assert_eq!(status.mode, Mode::Command);
-      assert_eq!(status.previous_buffer, Some("apognu".to_string()));
-      assert_eq!(status.buffer, "thecommand".to_string());
+      assert_eq!(status.buffer, "apognu".to_string());
+      assert_eq!(status.command_buffer, "thecommand".to_string());
     }
 
     for mode in [Mode::Users, Mode::Sessions, Mode::Power] {
@@ -855,6 +845,50 @@ mod test {
   }
 
   #[tokio::test]
+  async fn nested_menus_cannot_replace_an_authentication_response_with_command_text() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    {
+      let mut state = greeter.write().await;
+      state.allow_command_editor = true;
+      state.mode = Mode::Password;
+      state.previous_mode = Mode::Password;
+      state.buffer = "secret response".into();
+      state.session_source = SessionSource::Command("original command".into());
+      state.sessions.options.push(Session::default());
+    }
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::F(2), KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+    greeter.write().await.command_buffer = "attacker command".into();
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::F(3), KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+
+    let state = greeter.read().await;
+    assert_eq!(state.mode, Mode::Password);
+    assert_eq!(state.buffer, "secret response");
+    assert!(state.command_buffer.is_empty());
+    assert!(!matches!(&state.session_source, SessionSource::Command(command) if command == "attacker command"));
+  }
+
+  #[tokio::test]
   async fn command_editor_is_disabled_by_default() {
     let greeter = Arc::new(RwLock::new(Greeter::default()));
 
@@ -876,9 +910,9 @@ mod test {
       let mut greeter = greeter.write().await;
       greeter.session_source = SessionSource::DefaultCommand("safe-command".into(), None);
       greeter.previous_mode = Mode::Username;
-      greeter.previous_buffer = Some("username".into());
       greeter.mode = Mode::Command;
-      greeter.buffer = "untrusted-command".into();
+      greeter.buffer = "password".into();
+      greeter.command_buffer = "untrusted-command".into();
     }
 
     handle(
@@ -894,7 +928,8 @@ mod test {
       matches!(&greeter.session_source, SessionSource::DefaultCommand(command, None) if command == "safe-command")
     );
     assert_eq!(greeter.mode, Mode::Username);
-    assert_eq!(greeter.buffer, "username");
+    assert_eq!(greeter.buffer, "password");
+    assert!(greeter.command_buffer.is_empty());
   }
 
   #[tokio::test]
@@ -1044,7 +1079,7 @@ mod test {
     {
       let mut greeter = greeter.write().await;
       greeter.mode = Mode::Command;
-      greeter.buffer = "123456789".to_string();
+      greeter.command_buffer = "123456789".to_string();
     }
 
     let result = handle(

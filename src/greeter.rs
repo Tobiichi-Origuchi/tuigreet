@@ -243,11 +243,11 @@ pub struct Greeter {
   // Offset the cursor should be at from its base position for the current mode.
   pub cursor_offset: i16,
 
-  // Buffer to be used as a temporary editing zone for the various modes.
-  // Previous buffer is saved when a transient screen has to use the buffer, to
-  // be able to restore it when leaving the transient screen.
-  pub previous_buffer: Option<String>,
+  // Authentication responses and the optional command editor must never
+  // share storage: the latter is available before authentication and is a
+  // transient modal screen.
   pub buffer: String,
+  pub command_buffer: String,
 
   // Define the selected session and how to resolve it.
   pub session_source: SessionSource,
@@ -333,8 +333,8 @@ impl Default for Greeter {
       mode: Mode::default(),
       previous_mode: Mode::default(),
       cursor_offset: 0,
-      previous_buffer: None,
       buffer: String::new(),
+      command_buffer: String::new(),
       session_source: SessionSource::default(),
       allow_command_editor: false,
       session_paths: Vec::new(),
@@ -503,6 +503,7 @@ impl Greeter {
   // give the user another chance, as PAM would).
   fn scrub(&mut self, scrub_message: bool, soft: bool) {
     self.buffer.zeroize();
+    self.command_buffer.zeroize();
     self.prompt.zeroize();
 
     if !soft {
@@ -530,6 +531,31 @@ impl Greeter {
 
     self.scrub(false, soft);
     self.connect().await;
+  }
+
+  pub fn open_command_editor(&mut self) {
+    self.previous_mode = match self.mode {
+      Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => self.previous_mode,
+      _ => self.mode,
+    };
+
+    let command = self
+      .session_source
+      .command(self)
+      .map(str::to_string)
+      .unwrap_or_default();
+    self.command_buffer.zeroize();
+    self.command_buffer = command;
+    self.cursor_offset = 0;
+    self.mode = Mode::Command;
+  }
+
+  pub fn close_command_editor(&mut self) {
+    self.command_buffer.zeroize();
+    self.cursor_offset = 0;
+    if self.mode == Mode::Command {
+      self.mode = self.previous_mode;
+    }
   }
 
   // Connect to `greetd` and return a stream we can safely write to.
@@ -945,9 +971,7 @@ impl Greeter {
     self.remember_user_session = settings.remember_user_session;
     self.allow_command_editor = settings.allow_command_editor;
     if !self.allow_command_editor && self.mode == Mode::Command {
-      self.buffer = self.previous_buffer.take().unwrap_or_default();
-      self.cursor_offset = 0;
-      self.mode = self.previous_mode;
+      self.close_command_editor();
     }
     #[cfg(not(test))]
     if !self.allow_command_editor {
@@ -1483,8 +1507,8 @@ mod test {
     greeter.allow_command_editor = true;
     greeter.mode = Mode::Command;
     greeter.previous_mode = Mode::Username;
-    greeter.buffer = "untrusted command".into();
-    greeter.previous_buffer = Some("username buffer".into());
+    greeter.buffer = "password buffer".into();
+    greeter.command_buffer = "untrusted command".into();
     let mut settings = crate::config::Settings {
       debug: false,
       logfile: "/tmp/reloaded.log".into(),
@@ -1506,7 +1530,8 @@ mod test {
     assert!(greeter.mock);
     assert!(!greeter.allow_command_editor);
     assert_eq!(greeter.mode, Mode::Username);
-    assert_eq!(greeter.buffer, "username buffer");
+    assert_eq!(greeter.buffer, "password buffer");
+    assert!(greeter.command_buffer.is_empty());
     assert!(greeter.time);
     assert_eq!(greeter.refresh_rate, 60);
     assert!(matches!(greeter.secret_display, SecretDisplay::Character(ref value) if value == "#"));

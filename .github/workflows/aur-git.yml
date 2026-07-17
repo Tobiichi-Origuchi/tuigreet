@@ -18,14 +18,14 @@ concurrency:
 jobs:
   validate:
     needs: metadata
-    runs-on: ubuntu-latest
-    container: archlinux:base-devel
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel@sha256:212b1e518e94ee9c52be55e8a32da75fcf11e7b5610b80b49479e67880102406 # 2026-07-13
     permissions: {}
     steps:
       - name: Install build tools
         run: pacman -Syu --noconfirm git rust scdoc greetd
       - name: Download publish metadata
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aur-git-publish-metadata
           path: ${{ runner.temp }}/aur-package
@@ -50,12 +50,12 @@ jobs:
         run: pkill -KILL -u builder || true
 
   metadata:
-    runs-on: ubuntu-latest
-    container: archlinux:base-devel
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel@sha256:212b1e518e94ee9c52be55e8a32da75fcf11e7b5610b80b49479e67880102406 # 2026-07-13
     steps:
       - name: Install metadata tools
         run: pacman -Syu --noconfirm git pacman-contrib
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - name: Generate publish metadata
@@ -81,7 +81,7 @@ jobs:
           install -m644 "$directory/.SRCINFO" "$artifact/.SRCINFO"
           install -m644 "$directory/tuigreet.conf" "$artifact/tuigreet.conf"
       - name: Upload publish metadata
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: aur-git-publish-metadata
           path: ${{ runner.temp }}/aur-package
@@ -91,14 +91,14 @@ jobs:
 
   publish:
     needs: [ validate, metadata ]
-    runs-on: ubuntu-latest
-    container: archlinux:base-devel
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel@sha256:212b1e518e94ee9c52be55e8a32da75fcf11e7b5610b80b49479e67880102406 # 2026-07-13
     permissions: {}
     steps:
       - name: Install publish tools
         run: pacman -Syu --noconfirm git openssh
       - name: Download verified metadata
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aur-git-publish-metadata
           path: ${{ runner.temp }}/aur-package

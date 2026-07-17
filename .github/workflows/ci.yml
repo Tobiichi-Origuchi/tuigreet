@@ -16,6 +16,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.88.0
+  RUSTFMT_TOOLCHAIN: nightly-2026-07-15
 
 jobs:
   check:
@@ -26,13 +28,22 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
-          toolchain: nightly-2026-07-10
-          components: clippy, rustfmt
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: ${{ env.RUSTFMT_TOOLCHAIN }}
+          components: rustfmt
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Install test tools
         run: sudo apt-get update && sudo apt-get install --yes libnss-wrapper scdoc
+      - name: Check toolchain policy
+        run: |
+          test "$(rustc --version | cut -d ' ' -f 2)" = "$RUST_VERSION"
+          msrv=$(cargo metadata --locked --no-deps --format-version 1 | jq --raw-output '.packages[0].rust_version')
+          test "$msrv" = "${RUST_VERSION%.*}"
       - name: Check formatting
-        run: cargo fmt --all --check
+        run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
       - name: Lint
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Test

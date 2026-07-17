@@ -110,7 +110,7 @@ The administrator can restore the legacy `F2` command editor with `--allow-comma
 
 ### From source
 
-Building from source requires an installation of Rust's `stable` toolchain, including `cargo`.
+Building from source requires Rust 1.88 or newer from the stable channel, including `cargo`.
 
 ```
 $ git clone https://github.com/Tobiichi-Origuchi/tuigreety && cd tuigreety
@@ -146,6 +146,13 @@ Verify the adjacent SHA-256 file and the GitHub provenance attestation before in
 ## Running the tests
 
 Tests from the default features should run without any special consideration by running `cargo test`.
+
+All builds, lints, and tests use the stable toolchain declared in `rust-toolchain.toml`. Code formatting alone uses `nightly-2026-07-15`, because `.rustfmt.toml` enables unstable formatting rules:
+
+```sh
+rustup toolchain install nightly-2026-07-15 --profile minimal --component rustfmt
+cargo +nightly-2026-07-15 fmt --all --check
+```
 
 If you intend to run the whole test suite, you will need to perform some setup. One of our features uses NSS to list and filter existing users on the system, and in order not to rely on actual users being created on the host, we use [libnss_wrapper](https://cwrap.org/nss_wrapper.html) to mock responses from NSS. Without this, the tests would use the real user list from your system and probably fail because it cannot find the one it looks for.
 

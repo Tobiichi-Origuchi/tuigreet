@@ -176,7 +176,7 @@ pub enum AuthStatus {
 
 impl Display for AuthStatus {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    write!(f, "{:?}", self)
+    write!(f, "{self:?}")
   }
 }
 
@@ -1849,8 +1849,7 @@ mod test {
         true => {
           assert!(
             matches!(greeter.parse_options(opts).await, Ok(())),
-            "{:?} cannot be parsed",
-            opts
+            "{opts:?} cannot be parsed"
           );
 
           if let Some(check) = check {

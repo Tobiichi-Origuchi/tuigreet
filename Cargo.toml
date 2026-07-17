@@ -50,7 +50,8 @@ uzers = { version = "0.12.2", default-features = false }
 zeroize = "1.9.0"
 
 [profile.release]
-lto = true
+lto   = true
+strip = "symbols"
 
 [dev-dependencies]
 greetd-stub   = "0.3.0"

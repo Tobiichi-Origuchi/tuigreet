@@ -5,7 +5,6 @@ use greetd_ipc::Request;
 use tokio::sync::RwLock;
 
 use crate::{
-  AuthStatus,
   Greeter,
   Mode,
   event::Control,
@@ -56,7 +55,7 @@ pub async fn handle(
       modifiers: KeyModifiers::CONTROL,
       ..
     } => {
-      return Ok(Some(Control::Exit(AuthStatus::Cancel)));
+      return Ok(Some(Control::Exit(crate::AuthStatus::Cancel)));
     },
 
     // Depending on the active screen, pressing Escape will either return to the

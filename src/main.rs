@@ -10,6 +10,7 @@ mod ipc;
 mod keyboard;
 mod logger;
 mod power;
+mod terminal;
 mod text;
 mod ui;
 #[cfg(not(test))]
@@ -20,16 +21,6 @@ mod integration;
 
 use std::{env, error::Error, io, process, sync::Arc, time::Duration};
 
-#[cfg(not(test))]
-use crossterm::{
-  cursor::Hide,
-  terminal::{Clear, ClearType, EnterAlternateScreen, enable_raw_mode},
-};
-use crossterm::{
-  cursor::Show,
-  execute,
-  terminal::{LeaveAlternateScreen, disable_raw_mode},
-};
 use event::{Control, Event};
 use ipc::AuthState;
 use power::PowerPostAction;
@@ -38,6 +29,7 @@ use tokio::sync::{RwLock, mpsc};
 
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
+use crate::terminal::{TerminalSession, TerminationSignals};
 
 #[cfg(not(test))]
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
@@ -79,8 +71,6 @@ where
 {
   tracing::info!("tuigreet started");
 
-  register_panic_handler();
-
   let ipc = Ipc::new();
   let has_preselected_user = !greeter.username.value.is_empty();
   if has_preselected_user {
@@ -91,12 +81,10 @@ where
   #[cfg(not(test))]
   watcher::spawn(config::watched_paths(greeter.read().await.config()), events.sender());
 
-  #[cfg(not(test))]
-  {
-    enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All), Hide)?;
-  }
-
+  // Register signal listeners before changing terminal modes, then let the
+  // guard own every mode change until the Ratatui terminal has been dropped.
+  let mut termination_signals = TerminationSignals::new()?;
+  let _terminal_session = TerminalSession::enter()?;
   let mut terminal = Terminal::new(backend)?;
   let mut cursor_interval = tokio::time::interval(CURSOR_BLINK_INTERVAL);
   cursor_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -104,7 +92,7 @@ where
   let mut cursor_on = true;
 
   let (control_tx, mut control_rx) = mpsc::unbounded_channel();
-  let ipc_actor = tokio::task::spawn({
+  let mut ipc_actor = tokio::task::spawn({
     let greeter = greeter.clone();
     let ipc = ipc.clone();
     let renders = events.sender();
@@ -123,87 +111,109 @@ where
       .await;
   }
 
-  let exit_status = loop {
-    if let Some(status) = greeter.read().await.exit {
-      tracing::info!("exiting main loop");
-      break Some(status);
-    }
+  let mut ipc_actor_finished = false;
+  let loop_result: Result<Option<AuthStatus>, String> = async {
+    loop {
+      if let Some(status) = greeter.read().await.exit {
+        tracing::info!("exiting main loop");
+        break Ok(Some(status));
+      }
 
-    let control = tokio::select! {
-      biased;
+      let control = tokio::select! {
+        biased;
 
-      Some(control) = control_rx.recv() => Some(control),
+        Some(control) = control_rx.recv() => Some(control),
 
-      _ = cursor_interval.tick() => {
-        cursor_on = !cursor_on;
-        ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
-        None
-      },
-
-      event = events.next() => match event {
-        Some(Event::Render) => {
-          ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
-          None
-        },
-        Some(Event::Key(key)) => keyboard::handle(greeter.clone(), key, ipc.clone()).await?,
-        Some(Event::ReloadConfig) => {
-          let refresh_rate = {
-            let mut greeter = greeter.write().await;
-            match config::reload(greeter.config()) {
-              Ok((settings, warnings)) => {
-                for warning in warnings {
-                  tracing::warn!("configuration reload: {warning}");
-                }
-                for warning in greeter.reload_settings(settings) {
-                  tracing::warn!("configuration reload: {warning}");
-                }
-                Some(greeter.refresh_rate)
-              },
-              Err(warnings) => {
-                for warning in warnings {
-                  tracing::warn!("configuration reload rejected: {warning}");
-                }
-                None
-              },
-            }
+        actor = &mut ipc_actor => {
+          ipc_actor_finished = true;
+          let message = match actor {
+            Ok(()) => "greetd IPC actor stopped unexpectedly".to_string(),
+            Err(error) => format!("greetd IPC actor failed: {error}"),
           };
-          if let Some(refresh_rate) = refresh_rate {
-            events.set_refresh_rate(refresh_rate);
-            ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
-          }
+          break Err(message);
+        },
+
+        signal = termination_signals.recv() => {
+          tracing::warn!("received {signal}, shutting down");
+          Some(Control::Exit(AuthStatus::Failure))
+        },
+
+        _ = cursor_interval.tick() => {
+          cursor_on = !cursor_on;
+          ui::draw(greeter.clone(), &mut terminal, cursor_on)
+            .await
+            .map_err(|error| error.to_string())?;
           None
         },
-        None => None,
-      },
-    };
 
-    match control {
-      Some(Control::Exit(status)) => crate::exit(&mut *greeter.write().await, status, &ipc).await,
-      Some(Control::PowerCommand(command)) => {
-        if let PowerPostAction::ClearScreen = power::run(&greeter, *command).await {
-          execute!(io::stdout(), Show, LeaveAlternateScreen)?;
-          terminal.set_cursor_position((1, 1))?;
-          terminal.clear()?;
-          disable_raw_mode()?;
+        event = events.next() => match event {
+          Some(Event::Render) => {
+            ui::draw(greeter.clone(), &mut terminal, cursor_on)
+              .await
+              .map_err(|error| error.to_string())?;
+            None
+          },
+          Some(Event::Key(key)) => keyboard::handle(greeter.clone(), key, ipc.clone())
+            .await
+            .map_err(|error| error.to_string())?,
+          Some(Event::ReloadConfig) => {
+            let refresh_rate = {
+              let mut greeter = greeter.write().await;
+              match config::reload(greeter.config()) {
+                Ok((settings, warnings)) => {
+                  for warning in warnings {
+                    tracing::warn!("configuration reload: {warning}");
+                  }
+                  for warning in greeter.reload_settings(settings) {
+                    tracing::warn!("configuration reload: {warning}");
+                  }
+                  Some(greeter.refresh_rate)
+                },
+                Err(warnings) => {
+                  for warning in warnings {
+                    tracing::warn!("configuration reload rejected: {warning}");
+                  }
+                  None
+                },
+              }
+            };
+            if let Some(refresh_rate) = refresh_rate {
+              events.set_refresh_rate(refresh_rate);
+              ui::draw(greeter.clone(), &mut terminal, cursor_on)
+                .await
+                .map_err(|error| error.to_string())?;
+            }
+            None
+          },
+          None => None,
+        },
+      };
 
-          break None;
-        }
-      },
-      None => {},
+      match control {
+        Some(Control::Exit(status)) => crate::exit(&mut *greeter.write().await, status, &ipc),
+        Some(Control::PowerCommand(command)) => {
+          if let PowerPostAction::ClearScreen = power::run(&greeter, *command).await {
+            break Ok(None);
+          }
+        },
+        None => {},
+      }
     }
-  };
+  }
+  .await;
 
   ipc.shutdown();
-  if let Err(error) = ipc_actor.await {
-    tracing::error!("greetd IPC actor failed: {error}");
+  if !ipc_actor_finished && let Err(error) = ipc_actor.await {
+    tracing::error!("greetd IPC actor failed during shutdown: {error}");
   }
+  let exit_status = loop_result.map_err(io::Error::other)?;
   match exit_status {
     Some(status) => Err(status.into()),
     None => Ok(()),
   }
 }
 
-async fn exit(greeter: &mut Greeter, status: AuthStatus, ipc: &Ipc) {
+fn exit(greeter: &mut Greeter, status: AuthStatus, ipc: &Ipc) {
   tracing::info!("preparing exit with status {}", status);
 
   match status {
@@ -211,35 +221,5 @@ async fn exit(greeter: &mut Greeter, status: AuthStatus, ipc: &Ipc) {
     AuthStatus::Cancel | AuthStatus::Failure => ipc.cancel(greeter),
   }
 
-  #[cfg(not(test))]
-  clear_screen();
-
-  let _ = execute!(io::stdout(), Show, LeaveAlternateScreen);
-  let _ = disable_raw_mode();
-
   greeter.exit = Some(status);
-}
-
-fn register_panic_handler() {
-  let hook = std::panic::take_hook();
-
-  std::panic::set_hook(Box::new(move |info| {
-    #[cfg(not(test))]
-    clear_screen();
-
-    let _ = execute!(io::stdout(), Show, LeaveAlternateScreen);
-    let _ = disable_raw_mode();
-
-    hook(info);
-  }));
-}
-
-#[cfg(not(test))]
-pub fn clear_screen() {
-  let backend = CrosstermBackend::new(io::stdout());
-
-  if let Ok(mut terminal) = Terminal::new(backend) {
-    let _ = terminal.hide_cursor();
-    let _ = terminal.clear();
-  }
 }

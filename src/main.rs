@@ -157,17 +157,19 @@ where
             .await
             .map_err(|error| error.to_string())?,
           Some(Event::ReloadConfig) => {
-            let refresh_rate = {
+            let applied = {
               let mut greeter = greeter.write().await;
               match config::reload(greeter.config()) {
                 Ok((settings, warnings)) => {
                   for warning in warnings {
                     tracing::warn!("configuration reload: {warning}");
                   }
-                  for warning in greeter.reload_settings(settings) {
+                  let plan = ReloadPlan::prepare(greeter.reload_snapshot(), settings);
+                  let applied = greeter.apply_reload(plan);
+                  for warning in &applied.warnings {
                     tracing::warn!("configuration reload: {warning}");
                   }
-                  Some(greeter.refresh_rate)
+                  Some(applied)
                 },
                 Err(warnings) => {
                   for warning in warnings {
@@ -177,8 +179,15 @@ where
                 },
               }
             };
-            if let Some(refresh_rate) = refresh_rate {
-              events.set_refresh_rate(refresh_rate);
+            if let Some(applied) = applied {
+              #[cfg(not(test))]
+              if applied.clear_command_cache {
+                crate::info::delete_last_command();
+                if let Some(username) = &applied.cache_username {
+                  crate::info::delete_last_user_command(username);
+                }
+              }
+              events.set_refresh_rate(applied.refresh_rate);
               ui::draw(greeter.clone(), &mut terminal, cursor_on)
                 .await
                 .map_err(|error| error.to_string())?;

@@ -254,11 +254,11 @@ pub async fn handle(
         if let Some(User { username, name }) = username {
           greeter.username = MaskedString::from(username, name);
           greeter.username_cursor = greeter.username.value.len();
+          greeter.mode = greeter.previous_mode;
+          validate_username(&mut greeter, &ipc).await;
+        } else {
+          greeter.mode = greeter.previous_mode;
         }
-
-        greeter.mode = greeter.previous_mode;
-
-        validate_username(&mut greeter, &ipc).await;
       },
 
       Mode::Sessions => {
@@ -546,9 +546,7 @@ mod test {
   use std::sync::Arc;
 
   use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-  use tokio::sync::RwLock;
-  #[cfg(debug_assertions)]
-  use tokio::time::Duration;
+  use tokio::{sync::RwLock, time::Duration};
 
   use super::{Completion, common_prefix, complete_username, delete, handle, insert};
   #[cfg(debug_assertions)]
@@ -1246,6 +1244,37 @@ mod test {
     .await;
     assert!(result.is_ok());
     assert_eq!(greeter.read().await.sessions.selected, 0);
+  }
+
+  #[tokio::test]
+  async fn empty_user_menu_cannot_submit_an_empty_username() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    {
+      let mut state = greeter.write().await;
+      state.mode = Mode::Users;
+      state.previous_mode = Mode::Username;
+      state.user_menu = true;
+    }
+    let ipc = Ipc::new();
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+      ipc.clone(),
+    )
+    .await
+    .unwrap();
+
+    let state = greeter.read().await;
+    assert_eq!(state.mode, Mode::Username);
+    assert!(state.username.value.is_empty());
+    assert_eq!(state.auth_state, crate::ipc::AuthState::Idle);
+    drop(state);
+    assert!(
+      tokio::time::timeout(Duration::from_millis(10), ipc.next())
+        .await
+        .is_err()
+    );
   }
 
   #[tokio::test]

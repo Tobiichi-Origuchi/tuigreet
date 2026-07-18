@@ -31,7 +31,11 @@ use crate::{
   power::PowerOption,
   text::Text,
   ui::{
-    common::{masked::MaskedString, menu::Menu, style::Theme},
+    common::{
+      masked::MaskedString,
+      menu::{Menu, MenuItem},
+      style::Theme,
+    },
     power::Power,
     sessions::{Session, SessionSource, SessionType},
     users::User,
@@ -374,6 +378,106 @@ impl Drop for Greeter {
   }
 }
 
+#[derive(Clone)]
+pub(crate) struct ReloadSnapshot {
+  settings: Settings,
+  text: Text,
+  debug: bool,
+  logfile: String,
+  mock: bool,
+}
+
+pub(crate) struct ReloadPlan {
+  settings: Settings,
+  users: Option<Vec<User>>,
+  sessions: Option<DiscoveredSessions>,
+  greeting: Option<Option<String>>,
+  powers: Option<Vec<Power>>,
+  warnings: Vec<String>,
+}
+
+pub(crate) struct DiscoveredSessions {
+  paths: Vec<(PathBuf, SessionType)>,
+  options: Vec<Session>,
+}
+
+pub(crate) struct ReloadApplied {
+  pub refresh_rate: u16,
+  pub warnings: Vec<String>,
+  #[cfg_attr(test, allow(dead_code))]
+  pub clear_command_cache: bool,
+  #[cfg_attr(test, allow(dead_code))]
+  pub cache_username: Option<String>,
+}
+
+impl ReloadPlan {
+  pub(crate) fn prepare(snapshot: ReloadSnapshot, mut settings: Settings) -> Self {
+    let mut warnings = Vec::new();
+
+    if settings.debug != snapshot.debug || settings.logfile != snapshot.logfile {
+      warnings.push("general.debug and general.log-file require a restart; keeping their current values".into());
+      settings.debug = snapshot.debug;
+      settings.logfile.clone_from(&snapshot.logfile);
+    }
+    if settings.mock != snapshot.mock {
+      warnings.push("general.mock requires a restart; keeping its current value".into());
+      settings.mock = snapshot.mock;
+    }
+
+    let users_changed = settings.user_menu != snapshot.settings.user_menu
+      || settings.user_autocomplete != snapshot.settings.user_autocomplete
+      || settings.min_uid != snapshot.settings.min_uid
+      || settings.max_uid != snapshot.settings.max_uid;
+    let users = users_changed.then(|| {
+      if settings.user_menu || settings.user_autocomplete {
+        let (min_uid, max_uid) = get_min_max_uids(settings.min_uid, settings.max_uid);
+        tracing::info!("min/max UIDs are {}/{}", min_uid, max_uid);
+        get_users(min_uid, max_uid)
+      } else {
+        Vec::new()
+      }
+    });
+
+    let session_paths_changed =
+      settings.sessions != snapshot.settings.sessions || settings.xsessions != snapshot.settings.xsessions;
+    let sessions = session_paths_changed.then(|| {
+      let paths = session_paths(&settings.sessions, &settings.xsessions);
+      let mut sessions = get_sessions(&paths).unwrap_or_default();
+      if settings.mock && sessions.is_empty() {
+        sessions = mock_sessions();
+      }
+      DiscoveredSessions {
+        paths,
+        options: sessions,
+      }
+    });
+
+    let greeting_changed = settings.issue != snapshot.settings.issue || settings.greeting != snapshot.settings.greeting;
+    let greeting = greeting_changed.then(|| {
+      if settings.issue {
+        get_issue()
+      } else {
+        settings.greeting.clone()
+      }
+    });
+
+    let power_changed = settings.power_shutdown != snapshot.settings.power_shutdown
+      || settings.power_reboot != snapshot.settings.power_reboot
+      || settings.power_suspend != snapshot.settings.power_suspend
+      || settings.power_hibernate != snapshot.settings.power_hibernate;
+    let powers = power_changed.then(|| build_power_options(&snapshot.text, &settings));
+
+    Self {
+      settings,
+      users,
+      sessions,
+      greeting,
+      powers,
+      warnings,
+    }
+  }
+}
+
 impl Greeter {
   pub async fn new() -> Self {
     let mut greeter = Self::default();
@@ -471,8 +575,6 @@ impl Greeter {
       }
     }
 
-    greeter.select_only_user();
-
     // Same thing, but not user specific.
     if greeter.remember_session {
       if greeter.allow_command_editor
@@ -492,6 +594,8 @@ impl Greeter {
         greeter.session_source = SessionSource::Session(greeter.sessions.selected);
       }
     }
+
+    greeter.normalize_derived_state();
 
     greeter
   }
@@ -861,41 +965,7 @@ impl Greeter {
       self.greeting = tokio::task::spawn_blocking(get_issue).await.unwrap_or_default();
     }
 
-    self.powers.options.push(Power {
-      action: PowerOption::Shutdown,
-      label: text!(self, shutdown),
-      command: settings
-        .power_shutdown
-        .clone()
-        .or_else(|| crate::power::default_command(PowerOption::Shutdown)),
-    });
-
-    self.powers.options.push(Power {
-      action: PowerOption::Reboot,
-      label: text!(self, reboot),
-      command: settings
-        .power_reboot
-        .clone()
-        .or_else(|| crate::power::default_command(PowerOption::Reboot)),
-    });
-
-    self.powers.options.push(Power {
-      action: PowerOption::Suspend,
-      label: text!(self, suspend),
-      command: settings
-        .power_suspend
-        .clone()
-        .or_else(|| crate::power::default_command(PowerOption::Suspend)),
-    });
-
-    self.powers.options.push(Power {
-      action: PowerOption::Hibernate,
-      label: text!(self, hibernate),
-      command: settings
-        .power_hibernate
-        .clone()
-        .or_else(|| crate::power::default_command(PowerOption::Hibernate)),
-    });
+    self.powers.options = build_power_options(&self.text, &settings);
 
     self.power_setsid = settings.power_setsid;
     self.mock = settings.mock;
@@ -906,21 +976,38 @@ impl Greeter {
     Ok(())
   }
 
-  pub fn reload_settings(&mut self, mut settings: Settings) -> Vec<String> {
-    let mut warnings = Vec::new();
-
-    if settings.debug != self.debug || settings.logfile != self.logfile {
-      warnings.push("general.debug and general.log-file require a restart; keeping their current values".into());
-      settings.debug = self.debug;
-      settings.logfile.clone_from(&self.logfile);
+  pub(crate) fn reload_snapshot(&self) -> ReloadSnapshot {
+    ReloadSnapshot {
+      settings: self.settings.clone(),
+      text: self.text.clone(),
+      debug: self.debug,
+      logfile: self.logfile.clone(),
+      mock: self.mock,
     }
-    if settings.mock != self.mock {
-      warnings.push("general.mock requires a restart; keeping its current value".into());
-      settings.mock = self.mock;
-    }
+  }
 
-    let selected_path = Session::get_selected(self).and_then(|session| session.path.clone());
-    let had_default_command = matches!(self.session_source, SessionSource::DefaultCommand(_, _));
+  pub(crate) fn apply_reload(&mut self, plan: ReloadPlan) -> ReloadApplied {
+    let ReloadPlan {
+      settings,
+      users,
+      sessions,
+      greeting,
+      powers,
+      warnings,
+    } = plan;
+    let old_settings = self.settings.clone();
+    let highlighted_user = self
+      .users
+      .options
+      .get(self.users.selected)
+      .map(|user| user.username.clone());
+    let highlighted_session = self.sessions.options.get(self.sessions.selected).and_then(Session::id);
+    let active_session = match self.session_source {
+      SessionSource::Session(index) => self.sessions.options.get(index).and_then(Session::id),
+      _ => None,
+    };
+    let highlighted_power = self.powers.options.get(self.powers.selected).map(|power| power.action);
+    let command_editor_disabled = self.allow_command_editor && !settings.allow_command_editor;
 
     self.theme = Theme::parse(&settings.theme.specification());
     self.secret_display = if settings.asterisks {
@@ -935,18 +1022,23 @@ impl Greeter {
     self.user_menu = settings.user_menu;
     self.user_autocomplete = settings.user_autocomplete;
 
-    if self.user_menu || self.user_autocomplete {
-      let (min_uid, max_uid) = get_min_max_uids(settings.min_uid, settings.max_uid);
-      self.users = Menu {
-        title: text!(self, title_users),
-        options: get_users(min_uid, max_uid),
-        selected: 0,
-      };
-    } else {
-      self.users.options.clear();
-      if self.mode == Mode::Users {
-        self.mode = Mode::Username;
-      }
+    if let Some(users) = users {
+      self.users.options = users;
+      self.users.selected = highlighted_user
+        .as_deref()
+        .and_then(|username| self.users.options.iter().position(|user| user.username == username))
+        .or_else(|| {
+          (!self.username.value.is_empty())
+            .then(|| {
+              self
+                .users
+                .options
+                .iter()
+                .position(|user| user.username == self.username.value)
+            })
+            .flatten()
+        })
+        .unwrap_or(0);
     }
 
     self.remember = settings.remember;
@@ -956,87 +1048,130 @@ impl Greeter {
     if !self.allow_command_editor && self.mode == Mode::Command {
       self.close_command_editor();
     }
-    #[cfg(not(test))]
-    if !self.allow_command_editor {
-      crate::info::delete_last_command();
-      if !self.username.value.is_empty() {
-        crate::info::delete_last_user_command(&self.username.value);
+
+    if let Some(greeting) = greeting {
+      self.greeting = greeting;
+    }
+
+    if let Some(discovered) = sessions {
+      self.session_paths = discovered.paths;
+      self.sessions.options = discovered.options;
+      self.sessions.selected = highlighted_session
+        .as_ref()
+        .and_then(|id| {
+          self
+            .sessions
+            .options
+            .iter()
+            .position(|session| session.id().as_ref() == Some(id))
+        })
+        .unwrap_or(0);
+
+      if matches!(self.session_source, SessionSource::Session(_)) {
+        self.session_source = active_session
+          .as_ref()
+          .and_then(|id| {
+            self
+              .sessions
+              .options
+              .iter()
+              .position(|session| session.id().as_ref() == Some(id))
+          })
+          .map(SessionSource::Session)
+          .unwrap_or_else(|| self.fallback_session_source(&settings));
       }
     }
-    self.greeting.clone_from(&settings.greeting);
-    if settings.issue {
-      self.greeting = get_issue();
+
+    let command_changed = settings.command != old_settings.command;
+    let environment_changed = settings.environment != old_settings.environment;
+    if command_changed {
+      if let Some(command) = settings.command.clone() {
+        self.session_source = SessionSource::DefaultCommand(command, configured_environment(&settings));
+      } else if matches!(self.session_source, SessionSource::DefaultCommand(_, _)) {
+        self.session_source = self.fallback_session_source(&settings);
+      }
+    } else if environment_changed && let SessionSource::DefaultCommand(command, _) = &self.session_source {
+      self.session_source = SessionSource::DefaultCommand(command.clone(), configured_environment(&settings));
     }
 
-    self.session_paths.clear();
-    for dir in &settings.sessions {
-      self.add_session_path(PathBuf::from(dir), SessionType::Wayland);
+    if !self.allow_command_editor && matches!(self.session_source, SessionSource::Command(_)) {
+      self.session_source = self.fallback_session_source(&settings);
     }
-    for dir in &settings.xsessions {
-      self.add_session_path(PathBuf::from(dir), SessionType::X11);
+
+    if let Some(powers) = powers {
+      self.powers.options = powers;
+      self.powers.selected = highlighted_power
+        .and_then(|action| self.powers.options.iter().position(|power| power.action == action))
+        .unwrap_or(0);
     }
+
     self.session_wrapper.clone_from(&settings.session_wrapper);
     self.xsession_wrapper.clone_from(&settings.xsession_wrapper);
-    self.sessions.options = get_sessions(&self.session_paths).unwrap_or_default();
-    self.sessions.selected = selected_path
-      .as_deref()
-      .and_then(|path| {
-        self
-          .sessions
-          .options
-          .iter()
-          .position(|session| session.path.as_deref() == Some(path))
-      })
-      .unwrap_or(0);
-
-    if let Some(command) = settings.command.clone() {
-      let environment = (!settings.environment.is_empty()).then(|| settings.environment.clone());
-      self.session_source = SessionSource::DefaultCommand(command, environment);
-    } else if !self.allow_command_editor && matches!(&self.session_source, SessionSource::Command(_)) {
-      self.session_source = if self.sessions.options.is_empty() {
-        SessionSource::None
-      } else {
-        SessionSource::Session(0)
-      };
-    } else if selected_path.is_some() && !self.sessions.options.is_empty() {
-      self.session_source = SessionSource::Session(self.sessions.selected);
-    } else if selected_path.is_some() {
-      self.session_source = SessionSource::None;
-    } else if had_default_command {
-      self.session_source = if self.sessions.options.is_empty() {
-        SessionSource::None
-      } else {
-        SessionSource::Session(0)
-      };
-    }
-
-    self.powers.options.clear();
-    for (action, command) in [
-      (PowerOption::Shutdown, settings.power_shutdown.clone()),
-      (PowerOption::Reboot, settings.power_reboot.clone()),
-      (PowerOption::Suspend, settings.power_suspend.clone()),
-      (PowerOption::Hibernate, settings.power_hibernate.clone()),
-    ] {
-      let label = match action {
-        PowerOption::Shutdown => text!(self, shutdown),
-        PowerOption::Reboot => text!(self, reboot),
-        PowerOption::Suspend => text!(self, suspend),
-        PowerOption::Hibernate => text!(self, hibernate),
-      };
-      self.powers.options.push(Power {
-        action,
-        label,
-        command: command.or_else(|| crate::power::default_command(action)),
-      });
-    }
-
     self.power_setsid = settings.power_setsid;
     self.kb_command = settings.kb_command;
     self.kb_sessions = settings.kb_sessions;
     self.kb_power = settings.kb_power;
     self.settings = settings;
+    self.normalize_derived_state();
 
-    warnings
+    ReloadApplied {
+      refresh_rate: self.refresh_rate,
+      warnings,
+      clear_command_cache: command_editor_disabled,
+      cache_username: (!self.username.value.is_empty()).then(|| self.username.value.clone()),
+    }
+  }
+
+  fn fallback_session_source(&self, settings: &Settings) -> SessionSource {
+    settings.command.clone().map_or_else(
+      || {
+        if self.sessions.options.is_empty() {
+          SessionSource::None
+        } else {
+          SessionSource::Session(0)
+        }
+      },
+      |command| SessionSource::DefaultCommand(command, configured_environment(settings)),
+    )
+  }
+
+  fn normalize_derived_state(&mut self) {
+    clamp_menu(&mut self.users);
+    clamp_menu(&mut self.sessions);
+    clamp_menu(&mut self.powers);
+
+    if matches!(self.session_source, SessionSource::Session(index) if index >= self.sessions.options.len()) {
+      self.session_source = self.fallback_session_source(&self.settings);
+    }
+    if matches!(self.session_source, SessionSource::None) {
+      self.session_source = self.fallback_session_source(&self.settings);
+    }
+
+    let invalid_modal = match self.mode {
+      Mode::Users => !self.user_menu || self.users.options.is_empty(),
+      Mode::Sessions => self.sessions.options.is_empty(),
+      Mode::Power => self.powers.options.is_empty(),
+      Mode::Command => !self.allow_command_editor,
+      _ => false,
+    };
+    if invalid_modal {
+      self.mode = self.safe_previous_mode();
+    }
+
+    self.select_only_user();
+  }
+
+  fn safe_previous_mode(&self) -> Mode {
+    match self.previous_mode {
+      Mode::Username | Mode::Password | Mode::Action => self.previous_mode,
+      _ => {
+        if matches!(self.auth_state, AuthState::AwaitingInput(_)) {
+          Mode::Password
+        } else {
+          Mode::Username
+        }
+      },
+    }
   }
 
   pub fn set_prompt(&mut self, prompt: &str) {
@@ -1052,20 +1187,12 @@ impl Greeter {
   fn select_only_user(&mut self) {
     if self.username.value.is_empty()
       && self.user_menu
+      && self.mode == Mode::Username
+      && self.auth_state == AuthState::Idle
       && let [user] = self.users.options.as_slice()
     {
       self.username = MaskedString::from(user.username.clone(), user.name.clone());
       self.username_cursor = self.username.value.len();
-    }
-  }
-
-  fn add_session_path(&mut self, path: PathBuf, session_type: SessionType) {
-    if !self
-      .session_paths
-      .iter()
-      .any(|(known_path, known_type)| known_path == &path && known_type == &session_type)
-    {
-      self.session_paths.push((path, session_type));
     }
   }
 
@@ -1098,6 +1225,46 @@ fn mock_sessions() -> Vec<Session> {
     xdg_desktop_names: None,
   })
   .collect()
+}
+
+fn configured_environment(settings: &Settings) -> Option<Vec<String>> {
+  (!settings.environment.is_empty()).then(|| settings.environment.clone())
+}
+
+fn build_power_options(text: &Text, settings: &Settings) -> Vec<Power> {
+  [
+    (
+      PowerOption::Shutdown,
+      text.shutdown.clone(),
+      settings.power_shutdown.clone(),
+    ),
+    (PowerOption::Reboot, text.reboot.clone(), settings.power_reboot.clone()),
+    (
+      PowerOption::Suspend,
+      text.suspend.clone(),
+      settings.power_suspend.clone(),
+    ),
+    (
+      PowerOption::Hibernate,
+      text.hibernate.clone(),
+      settings.power_hibernate.clone(),
+    ),
+  ]
+  .into_iter()
+  .map(|(action, label, command)| Power {
+    action,
+    label,
+    command: command.or_else(|| crate::power::default_command(action)),
+  })
+  .collect()
+}
+
+fn clamp_menu<T: MenuItem>(menu: &mut Menu<T>) {
+  if menu.options.is_empty() {
+    menu.selected = 0;
+  } else {
+    menu.selected = menu.selected.min(menu.options.len() - 1);
+  }
 }
 
 fn print_usage(opts: CliOptions) {
@@ -1443,17 +1610,35 @@ fn version_information() -> String {
 mod test {
   use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 
-  use super::{mock_sessions, parse_options_ignoring_invalid, print_information, version_information};
+  use super::{
+    DiscoveredSessions,
+    ReloadPlan,
+    mock_sessions,
+    parse_options_ignoring_invalid,
+    print_information,
+    version_information,
+  };
   use crate::{
     Greeter,
     Mode,
     SecretDisplay,
     ui::{
       common::menu::Menu,
-      sessions::{SessionSource, SessionType},
+      sessions::{Session, SessionSource, SessionType},
       users::User,
     },
   };
+
+  fn reload_plan(settings: crate::config::Settings) -> ReloadPlan {
+    ReloadPlan {
+      settings,
+      users: None,
+      sessions: None,
+      greeting: None,
+      powers: None,
+      warnings: Vec::new(),
+    }
+  }
 
   #[test]
   fn test_prompt_width() {
@@ -1508,9 +1693,10 @@ mod test {
     };
     settings.theme.text = Some("red".into());
 
-    let warnings = greeter.reload_settings(settings);
+    let plan = ReloadPlan::prepare(greeter.reload_snapshot(), settings);
+    let applied = greeter.apply_reload(plan);
 
-    assert_eq!(warnings.len(), 2);
+    assert_eq!(applied.warnings.len(), 2);
     assert!(greeter.debug);
     assert_eq!(greeter.logfile, "/tmp/original.log");
     assert!(greeter.mock);
@@ -1522,6 +1708,121 @@ mod test {
     assert_eq!(greeter.refresh_rate, 60);
     assert!(matches!(greeter.secret_display, SecretDisplay::Character(ref value) if value == "#"));
     assert_eq!(greeter.kb_command, 5);
+  }
+
+  #[test]
+  fn unrelated_reload_preserves_the_runtime_session_choice() {
+    let mut greeter = Greeter::default();
+    greeter.settings.command = Some("configured-default".into());
+    greeter.sessions.options = vec![
+      Session {
+        name: "first".into(),
+        slug: Some("first".into()),
+        ..Default::default()
+      },
+      Session {
+        name: "chosen".into(),
+        slug: Some("chosen".into()),
+        ..Default::default()
+      },
+    ];
+    greeter.sessions.selected = 1;
+    greeter.session_source = SessionSource::Session(1);
+    let mut settings = greeter.settings.clone();
+    settings.time = true;
+
+    greeter.apply_reload(reload_plan(settings));
+
+    assert!(matches!(greeter.session_source, SessionSource::Session(1)));
+  }
+
+  #[test]
+  fn changed_configured_command_resets_but_environment_only_does_not_override_a_session() {
+    let mut greeter = Greeter::default();
+    greeter.settings.command = Some("old-default".into());
+    greeter.sessions.options = vec![Session {
+      name: "chosen".into(),
+      slug: Some("chosen".into()),
+      ..Default::default()
+    }];
+    greeter.session_source = SessionSource::Session(0);
+
+    let mut settings = greeter.settings.clone();
+    settings.environment = vec!["A=B".into()];
+    greeter.apply_reload(reload_plan(settings.clone()));
+    assert!(matches!(greeter.session_source, SessionSource::Session(0)));
+
+    settings.command = Some("new-default".into());
+    greeter.apply_reload(reload_plan(settings));
+    assert!(matches!(
+      greeter.session_source,
+      SessionSource::DefaultCommand(ref command, Some(ref environment))
+        if command == "new-default" && environment == &["A=B"]
+    ));
+  }
+
+  #[test]
+  fn reload_normalizes_user_modes_and_selects_a_new_sole_user() {
+    let mut greeter = Greeter::default();
+    let mut settings = greeter.settings.clone();
+    settings.user_menu = true;
+    let mut plan = reload_plan(settings.clone());
+    plan.users = Some(vec![User {
+      username: "only-user".into(),
+      name: Some("Only User".into()),
+    }]);
+
+    greeter.apply_reload(plan);
+    assert_eq!(greeter.username.value, "only-user");
+    assert_eq!(greeter.username.mask.as_deref(), Some("Only User"));
+
+    greeter.mode = Mode::Users;
+    greeter.previous_mode = Mode::Username;
+    settings.user_menu = false;
+    settings.user_autocomplete = true;
+    let mut plan = reload_plan(settings);
+    plan.users = Some(vec![User {
+      username: "only-user".into(),
+      name: None,
+    }]);
+    greeter.apply_reload(plan);
+
+    assert_eq!(greeter.mode, Mode::Username);
+    assert_eq!(greeter.users.selected, 0);
+  }
+
+  #[test]
+  fn reload_preserves_synthetic_sessions_and_closes_an_empty_menu() {
+    let mut greeter = Greeter::default();
+    greeter.mock = true;
+    greeter.settings.mock = true;
+    greeter.sessions.options = mock_sessions();
+    greeter.sessions.selected = 1;
+    greeter.session_source = SessionSource::Session(1);
+
+    let settings = greeter.settings.clone();
+    let mut plan = reload_plan(settings.clone());
+    let mut reordered = mock_sessions();
+    reordered.swap(0, 1);
+    plan.sessions = Some(DiscoveredSessions {
+      paths: Vec::new(),
+      options: reordered,
+    });
+    greeter.apply_reload(plan);
+    assert!(matches!(greeter.session_source, SessionSource::Session(0)));
+    assert_eq!(greeter.sessions.options[0].slug.as_deref(), Some("mock-x11"));
+
+    greeter.mode = Mode::Sessions;
+    greeter.previous_mode = Mode::Username;
+    let mut plan = reload_plan(settings);
+    plan.sessions = Some(DiscoveredSessions {
+      paths: Vec::new(),
+      options: Vec::new(),
+    });
+    greeter.apply_reload(plan);
+    assert_eq!(greeter.mode, Mode::Username);
+    assert!(matches!(greeter.session_source, SessionSource::None));
+    assert_eq!(greeter.sessions.selected, 0);
   }
 
   #[test]

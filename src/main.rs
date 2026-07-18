@@ -161,31 +161,20 @@ where
                 1 => Some("Configuration reloaded with 1 warning".into()),
                 count => Some(format!("Configuration reloaded with {count} warnings")),
               };
-              let cache_store = applied.clear_command_cache.then(|| greeter_state.cache_store.clone());
+              let cache_action = applied.cache_action;
               drop(greeter_state);
               report_reload_diagnostics("warning", &warnings);
-              let (cache_warnings, cache_failure) = if let Some(store) = cache_store.filter(|store| store.is_enabled()) {
-                match tokio::task::spawn_blocking(move || store.purge_commands()).await {
-                  Ok(Ok(commit)) => {
-                    greeter.write().await.cache_state = commit.state;
-                    (commit.warnings, None)
-                  },
-                  Ok(Err(error)) => (Vec::new(), Some(error.to_string())),
-                  Err(error) => (Vec::new(), Some(format!("cache worker failed: {error}"))),
+              if let Some(action) = cache_action {
+                let cache_report = execute_cache_reload(&greeter, action).await;
+                for warning in &cache_report.warnings {
+                  report_cache_warning(warning);
                 }
-              } else {
-                (Vec::new(), None)
-              };
-              for warning in &cache_warnings {
-                report_cache_warning(warning);
-              }
-              if let Some(error) = cache_failure {
-                report_cache_failure(&error);
-                greeter.write().await.config_notice =
-                  Some("Configuration reloaded; remembered-state cleanup failed".into());
-              } else if !cache_warnings.is_empty() {
-                greeter.write().await.config_notice =
-                  Some("Configuration reloaded; damaged remembered state was repaired".into());
+                if let Some(error) = cache_report.failure {
+                  report_cache_failure(&error);
+                  greeter.write().await.config_notice = Some(cache_report.operation.failure_notice().into());
+                } else if !cache_report.warnings.is_empty() {
+                  greeter.write().await.config_notice = Some(cache_report.operation.warning_notice().into());
+                }
               }
               events.set_refresh_rate(applied.refresh_rate);
               ui::draw(greeter.clone(), &mut terminal, cursor_on)
@@ -378,6 +367,86 @@ fn report_cache_warning(message: &str) {
   tracing::warn!("{message}");
 }
 
+struct CacheReloadReport {
+  warnings: Vec<String>,
+  failure: Option<String>,
+  operation: CacheReloadOperation,
+}
+
+#[derive(Clone, Copy)]
+enum CacheReloadOperation {
+  Initialize,
+  Cleanup,
+}
+
+impl CacheReloadOperation {
+  fn failure_notice(self) -> &'static str {
+    match self {
+      Self::Initialize => "Configuration reloaded; remembered-state initialization failed",
+      Self::Cleanup => "Configuration reloaded; remembered-state cleanup failed",
+    }
+  }
+
+  fn warning_notice(self) -> &'static str {
+    match self {
+      Self::Initialize => "Configuration reloaded with remembered-state warnings",
+      Self::Cleanup => "Configuration reloaded; damaged remembered state was repaired",
+    }
+  }
+}
+
+async fn execute_cache_reload(greeter: &Arc<RwLock<Greeter>>, action: CacheReloadAction) -> CacheReloadReport {
+  match action {
+    CacheReloadAction::Initialize {
+      store,
+      sessions,
+      allow_commands,
+      warn_if_missing,
+    } => match tokio::task::spawn_blocking(move || store.load(&sessions, allow_commands, warn_if_missing)).await {
+      Ok(load) => {
+        // CacheStore serializes this read with a concurrent successful-login
+        // commit. If the read won the race, the IPC actor has already changed
+        // AuthState to Started (which blocks further session input), and queues
+        // the exit control immediately after its commit. The briefly older
+        // in-memory snapshot therefore cannot start or alter another session.
+        greeter.write().await.finish_cache_initialization(load.state);
+        CacheReloadReport {
+          warnings: load.warnings,
+          failure: None,
+          operation: CacheReloadOperation::Initialize,
+        }
+      },
+      Err(error) => CacheReloadReport {
+        warnings: Vec::new(),
+        failure: Some(format!("cache worker failed: {error}")),
+        operation: CacheReloadOperation::Initialize,
+      },
+    },
+    CacheReloadAction::PurgeCommands { store } => {
+      match tokio::task::spawn_blocking(move || store.purge_commands()).await {
+        Ok(Ok(commit)) => {
+          greeter.write().await.cache_state = commit.state;
+          CacheReloadReport {
+            warnings: commit.warnings,
+            failure: None,
+            operation: CacheReloadOperation::Cleanup,
+          }
+        },
+        Ok(Err(error)) => CacheReloadReport {
+          warnings: Vec::new(),
+          failure: Some(error.to_string()),
+          operation: CacheReloadOperation::Cleanup,
+        },
+        Err(error) => CacheReloadReport {
+          warnings: Vec::new(),
+          failure: Some(format!("cache worker failed: {error}")),
+          operation: CacheReloadOperation::Cleanup,
+        },
+      }
+    },
+  }
+}
+
 fn exit(greeter: &mut Greeter, status: AuthStatus, ipc: &Ipc) {
   tracing::info!("preparing exit with status {}", status);
 
@@ -387,6 +456,63 @@ fn exit(greeter: &mut Greeter, status: AuthStatus, ipc: &Ipc) {
   }
 
   greeter.exit = Some(status);
+}
+
+#[cfg(test)]
+mod cache_reload_tests {
+  use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+
+  use tempfile::tempdir;
+
+  use super::*;
+  use crate::{
+    cache::CacheStore,
+    ui::sessions::{Session, SessionType},
+  };
+
+  #[tokio::test]
+  async fn deferred_command_cleanup_initializes_through_legacy_migration() {
+    let directory = tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let desktop_path = PathBuf::from("/sessions/reloaded.desktop");
+    let session = Session {
+      slug: Some("reloaded.desktop".into()),
+      name: "Reloaded".into(),
+      command: "start-reloaded".into(),
+      session_type: SessionType::Wayland,
+      path: Some(desktop_path.clone()),
+      xdg_desktop_names: None,
+    };
+    fs::write(directory.path().join("lastuser"), "alice").unwrap();
+    fs::write(
+      directory.path().join("lastsession-path"),
+      desktop_path.to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    fs::write(directory.path().join("lastsession"), "untrusted command").unwrap();
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+
+    let report = execute_cache_reload(&greeter, CacheReloadAction::Initialize {
+      store: CacheStore::at(directory.path()),
+      sessions: vec![session.clone()],
+      allow_commands: false,
+      warn_if_missing: false,
+    })
+    .await;
+
+    assert!(report.failure.is_none());
+    assert!(report.warnings.is_empty());
+    let state = greeter.read().await;
+    assert_eq!(state.cache_state.last_user().unwrap().username, "alice");
+    assert_eq!(
+      state.cache_state.global_selection().unwrap().resolve(&[session]),
+      Some(0)
+    );
+    assert!(directory.path().join("state.json").is_file());
+    assert!(!directory.path().join("lastuser").exists());
+    assert!(!directory.path().join("lastsession-path").exists());
+    assert!(!directory.path().join("lastsession").exists());
+  }
 }
 
 #[cfg(test)]

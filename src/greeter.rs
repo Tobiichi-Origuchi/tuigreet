@@ -12,7 +12,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use zeroize::Zeroize;
 
 use crate::{
-  cache::{CacheState, CacheStore, RememberedSelection},
+  cache::{CacheLoad, CacheState, CacheStore, RememberedSelection},
   config::{self, Settings},
   event::DEFAULT_REFRESH_RATE,
   info::{get_issue, get_min_max_uids, get_sessions, get_users, session_paths},
@@ -366,6 +366,9 @@ pub struct Greeter {
   // Last-known-good remembered state and the persistence target backing it.
   pub(crate) cache_state: CacheState,
   pub(crate) cache_store: CacheStore,
+  // Whether the system cache has been read for this process. Loading is
+  // deferred while no remembering or command cleanup policy needs it.
+  cache_lifecycle: CacheLifecycle,
 
   // Style object for the terminal UI
   pub theme: Theme,
@@ -437,6 +440,7 @@ impl Default for Greeter {
       remember_user_session: false,
       cache_state: CacheState::default(),
       cache_store: CacheStore::disabled(),
+      cache_lifecycle: CacheLifecycle::Initialized,
       theme: Theme::default(),
       time: false,
       time_format: None,
@@ -486,11 +490,33 @@ pub(crate) struct DiscoveredSessions {
   options: Vec<Session>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CacheLifecycle {
+  /// The store remains available, but no filesystem access has been made.
+  Deferred,
+  /// A load completed (possibly with fail-open warnings), or the store is disabled.
+  Initialized,
+}
+
+/// Immutable cache work derived from one fully applied configuration revision.
+/// Carrying the store, policy, and post-reload sessions keeps blocking I/O out
+/// of the Greeter lock without rereading mutable state afterward.
+pub(crate) enum CacheReloadAction {
+  Initialize {
+    store: CacheStore,
+    sessions: Vec<Session>,
+    allow_commands: bool,
+    warn_if_missing: bool,
+  },
+  PurgeCommands {
+    store: CacheStore,
+  },
+}
+
 pub(crate) struct ReloadApplied {
   pub refresh_rate: u16,
   pub warnings: Vec<String>,
-  #[cfg_attr(test, allow(dead_code))]
-  pub clear_command_cache: bool,
+  pub cache_action: Option<CacheReloadAction>,
 }
 
 impl ReloadPlan {
@@ -617,25 +643,7 @@ impl Greeter {
       greeter.cache_store = CacheStore::for_runtime(greeter.mock);
     }
 
-    let store = greeter.cache_store.clone();
-    let cache_sessions = greeter.sessions.options.clone();
-    let allow_commands = greeter.allow_command_editor;
-    let cache_required = greeter.remember || greeter.remember_session || greeter.remember_user_session;
-    let cache = if store.is_enabled() {
-      tokio::task::spawn_blocking(move || store.load(&cache_sessions, allow_commands, cache_required))
-        .await
-        .unwrap_or_else(|error| crate::cache::CacheLoad {
-          state: CacheState::default(),
-          warnings: vec![format!("cache worker failed: {error}")],
-        })
-    } else {
-      crate::cache::CacheLoad::default()
-    };
-    for warning in cache.warnings {
-      eprintln!("tuigreet: warning: {warning}");
-      tracing::warn!("{warning}");
-    }
-    greeter.cache_state = cache.state;
+    greeter.initialize_cache().await;
 
     if greeter.remember
       && let Some(user) = greeter.cache_state.last_user().cloned()
@@ -658,6 +666,49 @@ impl Greeter {
     greeter.normalize_derived_state();
 
     greeter
+  }
+
+  async fn initialize_cache(&mut self) {
+    if !self.cache_store.is_enabled() {
+      self.cache_lifecycle = CacheLifecycle::Initialized;
+      return;
+    }
+
+    // Mark the cache deferred before starting work so a failed worker can be
+    // retried by a later reload instead of being mistaken for a completed load.
+    self.cache_lifecycle = CacheLifecycle::Deferred;
+    let warn_if_missing = self.remembering_enabled();
+    if !warn_if_missing && self.allow_command_editor {
+      return;
+    }
+
+    let store = self.cache_store.clone();
+    let sessions = self.sessions.options.clone();
+    let allow_commands = self.allow_command_editor;
+    match tokio::task::spawn_blocking(move || store.load(&sessions, allow_commands, warn_if_missing)).await {
+      Ok(load) => {
+        let CacheLoad { state, warnings } = load;
+        for warning in warnings {
+          eprintln!("tuigreet: warning: {warning}");
+          tracing::warn!("{warning}");
+        }
+        self.finish_cache_initialization(state);
+      },
+      Err(error) => {
+        let warning = format!("cache worker failed: {error}");
+        eprintln!("tuigreet: warning: {warning}");
+        tracing::warn!("{warning}");
+      },
+    }
+  }
+
+  fn remembering_enabled(&self) -> bool {
+    self.remember || self.remember_session || self.remember_user_session
+  }
+
+  pub(crate) fn finish_cache_initialization(&mut self, state: CacheState) {
+    self.cache_state = state;
+    self.cache_lifecycle = CacheLifecycle::Initialized;
   }
 
   pub(crate) fn restore_cached_selection(&mut self, selection: &RememberedSelection) -> bool {
@@ -1110,6 +1161,8 @@ impl Greeter {
     self.remember_user_session = settings.remember_user_session;
     self.allow_command_editor = settings.allow_command_editor;
     if command_editor_disabled {
+      // A deferred cache has an intentionally empty in-memory state. Disk
+      // cleanup still happens through the Initialize action selected below.
       self.cache_state.purge_commands();
     }
     if !self.allow_command_editor && self.mode == Mode::Command {
@@ -1181,10 +1234,30 @@ impl Greeter {
     self.settings = settings;
     self.normalize_derived_state();
 
+    // Initialization takes precedence over a direct purge: when no state file
+    // exists, load performs the legacy migration before removing command data.
+    let cache_action = if self.cache_store.is_enabled()
+      && self.cache_lifecycle == CacheLifecycle::Deferred
+      && (self.remembering_enabled() || !self.allow_command_editor)
+    {
+      Some(CacheReloadAction::Initialize {
+        store: self.cache_store.clone(),
+        sessions: self.sessions.options.clone(),
+        allow_commands: self.allow_command_editor,
+        warn_if_missing: self.remembering_enabled(),
+      })
+    } else if self.cache_store.is_enabled() && command_editor_disabled {
+      Some(CacheReloadAction::PurgeCommands {
+        store: self.cache_store.clone(),
+      })
+    } else {
+      None
+    };
+
     ReloadApplied {
       refresh_rate: self.refresh_rate,
       warnings,
-      clear_command_cache: command_editor_disabled,
+      cache_action,
     }
   }
 
@@ -1651,9 +1724,18 @@ fn version_information() -> String {
 
 #[cfg(test)]
 mod test {
-  use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
+  use std::{
+    ffi::OsString,
+    fs,
+    os::unix::{ffi::OsStringExt, fs::PermissionsExt},
+    path::PathBuf,
+  };
+
+  use tempfile::tempdir;
 
   use super::{
+    CacheLifecycle,
+    CacheReloadAction,
     CliAction,
     CliInvocation,
     DiscoveredSessions,
@@ -1667,6 +1749,7 @@ mod test {
     Greeter,
     Mode,
     SecretDisplay,
+    cache::CacheStore,
     config::Settings,
     power::{CommandLine, PowerCommand, PowerOption, default_command},
     text::Text,
@@ -1686,6 +1769,109 @@ mod test {
       powers: None,
       warnings: Vec::new(),
     }
+  }
+
+  fn deferred_cache_greeter() -> (tempfile::TempDir, Greeter) {
+    let directory = tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let mut greeter = Greeter::default();
+    greeter.cache_store = CacheStore::at(directory.path());
+    greeter.cache_lifecycle = CacheLifecycle::Deferred;
+    greeter.allow_command_editor = true;
+    greeter.settings.allow_command_editor = true;
+    (directory, greeter)
+  }
+
+  #[tokio::test]
+  async fn unused_startup_cache_is_deferred_without_reading_disk() {
+    let (directory, mut greeter) = deferred_cache_greeter();
+    let state_path = directory.path().join("state.json");
+    let damaged = b"damaged but unused";
+    fs::write(&state_path, damaged).unwrap();
+    fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    greeter.initialize_cache().await;
+
+    assert_eq!(greeter.cache_lifecycle, CacheLifecycle::Deferred);
+    assert_eq!(fs::read(state_path).unwrap(), damaged);
+  }
+
+  #[test]
+  fn deferred_cache_reload_actions_follow_the_applied_policy() {
+    let (_directory, mut unrelated) = deferred_cache_greeter();
+    let mut settings = unrelated.settings.clone();
+    settings.time = true;
+    assert!(unrelated.apply_reload(reload_plan(settings)).cache_action.is_none());
+    assert_eq!(unrelated.cache_lifecycle, CacheLifecycle::Deferred);
+
+    let (_directory, mut remembering) = deferred_cache_greeter();
+    let mut settings = remembering.settings.clone();
+    settings.remember = true;
+    let reloaded_session = Session {
+      slug: Some("reloaded.desktop".into()),
+      name: "Reloaded".into(),
+      command: "start-reloaded".into(),
+      session_type: SessionType::Wayland,
+      path: Some(PathBuf::from("/sessions/reloaded.desktop")),
+      xdg_desktop_names: None,
+    };
+    let mut plan = reload_plan(settings);
+    plan.sessions = Some(DiscoveredSessions {
+      paths: vec![(PathBuf::from("/sessions"), SessionType::Wayland)],
+      options: vec![reloaded_session],
+    });
+    let Some(CacheReloadAction::Initialize {
+      sessions,
+      allow_commands,
+      warn_if_missing,
+      ..
+    }) = remembering.apply_reload(plan).cache_action
+    else {
+      panic!("enabling remembering did not initialize the deferred cache");
+    };
+    assert!(allow_commands);
+    assert!(warn_if_missing);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].slug.as_deref(), Some("reloaded.desktop"));
+    assert_eq!(remembering.cache_lifecycle, CacheLifecycle::Deferred);
+
+    let (_directory, mut disabling_commands) = deferred_cache_greeter();
+    let mut settings = disabling_commands.settings.clone();
+    settings.allow_command_editor = false;
+    let Some(CacheReloadAction::Initialize {
+      allow_commands,
+      warn_if_missing,
+      ..
+    }) = disabling_commands.apply_reload(reload_plan(settings)).cache_action
+    else {
+      panic!("disabling commands bypassed deferred cache initialization");
+    };
+    assert!(!allow_commands);
+    assert!(!warn_if_missing);
+
+    let (_directory, mut both) = deferred_cache_greeter();
+    let mut settings = both.settings.clone();
+    settings.allow_command_editor = false;
+    settings.remember = true;
+    let Some(CacheReloadAction::Initialize {
+      allow_commands,
+      warn_if_missing,
+      ..
+    }) = both.apply_reload(reload_plan(settings)).cache_action
+    else {
+      panic!("combined policy change did not use one initialization action");
+    };
+    assert!(!allow_commands);
+    assert!(warn_if_missing);
+
+    let (_directory, mut initialized) = deferred_cache_greeter();
+    initialized.cache_lifecycle = CacheLifecycle::Initialized;
+    let mut settings = initialized.settings.clone();
+    settings.allow_command_editor = false;
+    assert!(matches!(
+      initialized.apply_reload(reload_plan(settings)).cache_action,
+      Some(CacheReloadAction::PurgeCommands { .. })
+    ));
   }
 
   fn defaults_without_sleep(option: PowerOption) -> Option<CommandLine> {

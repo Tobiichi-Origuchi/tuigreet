@@ -716,7 +716,7 @@ fn request_render(renders: &Sender<Event>) {
 }
 
 async fn persist_cache(store: CacheStore, update: Option<CacheUpdate>) {
-  let Some(update) = update.filter(|_| store.is_enabled()) else {
+  let Some(update) = update.filter(|update| store.is_enabled() && !update.is_noop()) else {
     return;
   };
 
@@ -867,12 +867,13 @@ mod test {
     PendingSession,
     TransactionFailure,
     mock_response,
+    persist_cache,
     wrap_session_command,
   };
   use crate::{
     Greeter,
     Mode,
-    cache::CacheStore,
+    cache::{CacheStore, CacheUpdate, RememberedSelection, RememberedUser},
     event::{Control, Events, fill_event_queue},
     ipc::{DefaultCommand, desktop_names_to_xdg},
     ui::{
@@ -899,6 +900,61 @@ mod test {
       Response::Success
     ));
     assert!(matches!(mock_response(&Request::CancelSession), Response::Success));
+  }
+
+  #[tokio::test]
+  async fn no_op_cache_persistence_never_touches_damaged_disk_state() {
+    let directory = tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let state_path = directory.path().join("state.json");
+    let damaged = b"leave this damaged state untouched";
+    fs::write(&state_path, damaged).unwrap();
+    fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let store = CacheStore::at(directory.path());
+    let update = CacheUpdate::successful_login(
+      RememberedUser {
+        username: "alice".into(),
+        display_name: None,
+      },
+      Some(RememberedSelection::command("session".into())),
+      false,
+      false,
+      false,
+      true,
+    );
+
+    persist_cache(store, Some(update)).await;
+
+    assert_eq!(fs::read(state_path).unwrap(), damaged);
+  }
+
+  #[tokio::test]
+  async fn disabled_commands_still_make_cache_persistence_non_noop() {
+    let directory = tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let store = CacheStore::at(directory.path());
+    let user = RememberedUser {
+      username: "alice".into(),
+      display_name: None,
+    };
+    store
+      .commit(CacheUpdate::successful_login(
+        user.clone(),
+        Some(RememberedSelection::command("session".into())),
+        false,
+        true,
+        false,
+        true,
+      ))
+      .unwrap();
+
+    persist_cache(
+      store.clone(),
+      Some(CacheUpdate::successful_login(user, None, false, false, false, false)),
+    )
+    .await;
+
+    assert!(store.load(&[], true, true).state.global_selection().is_none());
   }
 
   #[tokio::test]

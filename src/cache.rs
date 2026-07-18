@@ -308,6 +308,15 @@ impl CacheUpdate {
       purge_commands: true,
     }
   }
+
+  pub(crate) fn is_noop(&self) -> bool {
+    // Use this only before persistence begins. `CacheStore::commit` must still
+    // read and return the real on-disk state even for a semantic no-op.
+    matches!(self.last_user, Change::Keep)
+      && matches!(self.global_selection, Change::Keep)
+      && self.user_selection.is_none()
+      && !self.purge_commands
+  }
 }
 
 impl CacheStore {
@@ -903,6 +912,23 @@ mod tests {
 
   fn command(value: &str) -> RememberedSelection {
     RememberedSelection::command(value.into())
+  }
+
+  #[test]
+  fn cache_update_noop_detection_preserves_every_real_mutation() {
+    let no_remembering =
+      CacheUpdate::successful_login(user("alice"), Some(command("start")), false, false, false, true);
+    assert!(no_remembering.is_noop());
+
+    for update in [
+      CacheUpdate::successful_login(user("alice"), None, true, false, false, true),
+      CacheUpdate::successful_login(user("alice"), None, false, true, false, true),
+      CacheUpdate::successful_login(user("alice"), None, false, false, true, true),
+      CacheUpdate::successful_login(user("alice"), None, false, false, false, false),
+      CacheUpdate::purge_commands(),
+    ] {
+      assert!(!update.is_noop());
+    }
   }
 
   #[test]

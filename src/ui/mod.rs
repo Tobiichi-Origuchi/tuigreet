@@ -122,6 +122,13 @@ where
       status_label(theme, session_source_label),
       status_value(&greeter, theme, Button::Other, session_source),
     ]);
+    if let Some(notice) = &greeter.config_notice {
+      status_left_spans.extend([
+        Span::from(" "),
+        status_label(theme, "CONFIG"),
+        status_value(&greeter, theme, Button::Other, notice),
+      ]);
+    }
     let status_left_text = Line::from(status_left_spans);
     let status_left = Paragraph::new(status_left_text);
 
@@ -404,5 +411,25 @@ mod tests {
     let mut terminal = Terminal::new(backend).unwrap();
 
     draw(greeter, &mut terminal, true).await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn configuration_notice_does_not_replace_pam_feedback() {
+    let mut greeter = Greeter::default();
+    greeter.message = Some("PAM feedback remains visible".into());
+    greeter.config_notice = Some("Reload warning summary".into());
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+
+    draw(Arc::new(RwLock::new(greeter)), &mut terminal, true).await.unwrap();
+
+    let rendered = terminal
+      .backend()
+      .buffer()
+      .content
+      .iter()
+      .map(|cell| cell.symbol())
+      .collect::<String>();
+    assert!(rendered.contains("PAM feedback remains visible"));
+    assert!(rendered.contains("Reload warning summary"));
   }
 }

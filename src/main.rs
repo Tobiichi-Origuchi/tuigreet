@@ -142,14 +142,17 @@ where
 
         outcome = reloads.next(), if reloads.has_pending() => {
           match outcome {
-            reload::ReloadOutcome::Ready { plan, warnings } => {
-              for warning in warnings {
-                tracing::warn!("configuration reload: {warning}");
-              }
-              let applied = greeter.write().await.apply_reload(*plan);
-              for warning in &applied.warnings {
-                tracing::warn!("configuration reload: {warning}");
-              }
+            reload::ReloadOutcome::Ready { plan, mut warnings } => {
+              let mut greeter_state = greeter.write().await;
+              let mut applied = greeter_state.apply_reload(*plan);
+              warnings.append(&mut applied.warnings);
+              greeter_state.config_notice = match warnings.len() {
+                0 => None,
+                1 => Some("Configuration reloaded with 1 warning".into()),
+                count => Some(format!("Configuration reloaded with {count} warnings")),
+              };
+              drop(greeter_state);
+              report_reload_diagnostics("warning", &warnings);
               #[cfg(not(test))]
               if applied.clear_command_cache {
                 crate::info::delete_last_command();
@@ -163,15 +166,29 @@ where
                 .map_err(|error| error.to_string())?;
             },
             reload::ReloadOutcome::Rejected { warnings } => {
-              for warning in warnings {
-                tracing::warn!("configuration reload rejected: {warning}");
-              }
+              report_reload_diagnostics("rejected", &warnings);
+              greeter.write().await.config_notice =
+                Some("Configuration reload rejected; previous settings remain active".into());
+              ui::draw(greeter.clone(), &mut terminal, cursor_on)
+                .await
+                .map_err(|error| error.to_string())?;
             },
             reload::ReloadOutcome::Failed => {
-              tracing::error!("configuration reload worker panicked; keeping the previous settings");
+              let message = "configuration reload worker panicked; keeping the previous settings";
+              report_reload_failure(message);
+              greeter.write().await.config_notice =
+                Some("Configuration reload failed; previous settings remain active".into());
+              ui::draw(greeter.clone(), &mut terminal, cursor_on)
+                .await
+                .map_err(|error| error.to_string())?;
             },
             reload::ReloadOutcome::WorkerStopped => {
-              tracing::error!("configuration reload worker stopped unexpectedly");
+              let message = "configuration reload worker stopped unexpectedly";
+              report_reload_failure(message);
+              greeter.write().await.config_notice = Some("Configuration reload is unavailable".into());
+              ui::draw(greeter.clone(), &mut terminal, cursor_on)
+                .await
+                .map_err(|error| error.to_string())?;
             },
           }
           None
@@ -201,7 +218,11 @@ where
               (greeter.config_handle(), greeter.reload_snapshot())
             };
             if let Err(error) = reloads.request(config, snapshot) {
-              tracing::error!("{error}");
+              report_reload_failure(&error);
+              greeter.write().await.config_notice = Some("Configuration reload is unavailable".into());
+              ui::draw(greeter.clone(), &mut terminal, cursor_on)
+                .await
+                .map_err(|error| error.to_string())?;
             }
             None
           },
@@ -231,6 +252,18 @@ where
     Some(status) => Err(status.into()),
     None => Ok(()),
   }
+}
+
+fn report_reload_diagnostics(state: &str, diagnostics: &[String]) {
+  for diagnostic in diagnostics {
+    eprintln!("tuigreet: configuration reload {state}:\n{diagnostic}");
+    tracing::warn!("configuration reload {state}: {diagnostic}");
+  }
+}
+
+fn report_reload_failure(message: &str) {
+  eprintln!("tuigreet: error: {message}");
+  tracing::error!("{message}");
 }
 
 fn exit(greeter: &mut Greeter, status: AuthStatus, ipc: &Ipc) {

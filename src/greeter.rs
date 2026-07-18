@@ -301,6 +301,8 @@ pub struct Greeter {
   pub message: Option<String>,
   // Non-secret, transient feedback from the local input editor.
   pub(crate) input_warning: Option<String>,
+  // Non-sensitive summary of the most recent configuration reload.
+  pub(crate) config_notice: Option<String>,
 
   // Menu for power options.
   pub powers: Menu<Power>,
@@ -361,6 +363,7 @@ impl Default for Greeter {
       greeting: None,
       message: None,
       input_warning: None,
+      config_notice: None,
       powers: Menu::default(),
       power_setsid: false,
       mock: false,

@@ -80,6 +80,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ inputs.version }}
+      - name: Trust checkout in container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Validate release
         env:
           GH_TOKEN: ${{ github.token }}

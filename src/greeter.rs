@@ -298,7 +298,7 @@ pub struct Greeter {
 
   // Menu for power options.
   pub powers: Menu<Power>,
-  // Whether to prefix the power commands with `setsid`.
+  // Whether to start power commands in a new session and process group.
   pub power_setsid: bool,
 
   // Run without greetd and simulate authentication for visual testing.
@@ -865,7 +865,7 @@ impl Greeter {
       "command to run to hibernate the system",
       "'CMD [ARGS]...'",
     );
-    opts.optflag("", "power-no-setsid", "do not prefix power commands with setsid");
+    opts.optflag("", "power-no-setsid", "do not start power commands in a new session");
     opts.optflag(
       "",
       "mock",

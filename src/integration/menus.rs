@@ -1,12 +1,23 @@
+use std::time::Duration;
+
 use crossterm::event::{KeyCode, KeyModifiers};
 use libgreetd_stub::SessionOptions;
 
 use super::common::IntegrationRunner;
 use crate::{
   AuthStatus,
-  power::PowerOption,
+  Greeter,
+  power::{CommandLine, PowerOption},
   ui::{common::menu::Menu, power::Power, sessions::Session, users::User},
 };
+
+fn add_test_power_action(greeter: &mut Greeter) {
+  greeter.powers.options.push(Power {
+    action: PowerOption::Shutdown,
+    label: "Test power action".into(),
+    command: Some(CommandLine::from_argv(vec!["/bin/true".into()]).unwrap()),
+  });
+}
 
 #[tokio::test]
 async fn menus_labels_default() {
@@ -16,7 +27,7 @@ async fn menus_labels_default() {
     mfa: false,
   };
 
-  let mut runner = IntegrationRunner::new(opts, None).await;
+  let mut runner = IntegrationRunner::new(opts, Some(add_test_power_action)).await;
 
   let events = tokio::task::spawn({
     let mut runner = runner.clone();
@@ -44,6 +55,7 @@ async fn menus_labels_with_custom_bindings() {
   let mut runner = IntegrationRunner::new(
     opts,
     Some(|greeter| {
+      add_test_power_action(greeter);
       greeter.kb_command = 11;
       greeter.allow_command_editor = false;
       greeter.kb_sessions = 1;
@@ -229,6 +241,54 @@ async fn power_menu() {
       assert!(runner.output().await.contains("And back on again"));
       assert!(runner.output().await.contains("Take a nap"));
       assert!(runner.output().await.contains("Sleep for winter"));
+    }
+  });
+
+  runner.join_until_end(events).await;
+}
+
+#[tokio::test]
+async fn power_command_draws_processing_before_it_completes_and_can_be_cancelled() {
+  let opts = SessionOptions {
+    username: "apognu".to_string(),
+    password: "password".to_string(),
+    mfa: false,
+  };
+
+  let mut runner = IntegrationRunner::new(
+    opts,
+    Some(|greeter| {
+      greeter.powers = Menu::<Power> {
+        title: "Power".into(),
+        options: vec![Power {
+          action: PowerOption::Shutdown,
+          label: "Slow power command".into(),
+          command: Some(CommandLine::from_argv(vec!["/bin/sleep".into(), "60".into()]).unwrap()),
+        }],
+        selected: 0,
+      };
+    }),
+  )
+  .await;
+
+  let events = tokio::spawn({
+    let mut runner = runner.clone();
+
+    async move {
+      runner.wait_until_buffer_contains("Username:").await;
+      runner.send_key(KeyCode::F(12)).await;
+      runner.wait_until_buffer_contains("Slow power command").await;
+      runner.send_key(KeyCode::Enter).await;
+
+      tokio::time::timeout(
+        Duration::from_secs(1),
+        runner.wait_until_buffer_contains("Please wait..."),
+      )
+      .await
+      .expect("Processing was not drawn before the slow power command completed");
+
+      runner.send_key(KeyCode::Esc).await;
+      runner.wait_until_buffer_contains("Username:").await;
     }
   });
 

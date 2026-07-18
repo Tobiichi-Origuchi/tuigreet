@@ -107,7 +107,9 @@
 # hibernate = ["systemctl", "hibernate"]
 # Set an action to false to disable and hide it, including its detected default.
 # Legacy command strings remain accepted and are parsed into argv for compatibility.
-# Detach power commands from the current TTY with setsid.
+# Detach power commands in a new session/process group via setsid(2).
+# This is an internal system call and does not require a setsid executable.
+# Power commands time out after 30 seconds and can be cancelled with Escape.
 # setsid = true
 
 [keybindings]

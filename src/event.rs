@@ -10,12 +10,9 @@ use std::{
 use crossterm::event::EventStream;
 use crossterm::event::{Event as TermEvent, KeyEvent};
 use futures_util::{StreamExt, future::FutureExt};
-use tokio::{
-  process::Command,
-  sync::mpsc::{self, Sender},
-};
+use tokio::sync::mpsc::{self, Sender};
 
-use crate::AuthStatus;
+use crate::{AuthStatus, power::PowerRequest};
 
 pub const DEFAULT_REFRESH_RATE: u16 = 2;
 pub const MAX_REFRESH_RATE: u16 = 240;
@@ -31,7 +28,8 @@ pub enum Event {
 /// and terminal input for space in the bounded event queue.
 pub enum Control {
   Exit(AuthStatus),
-  PowerCommand(Box<Command>),
+  PowerCommand(PowerRequest),
+  CancelPower,
 }
 
 pub struct Events {

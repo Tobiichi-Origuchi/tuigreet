@@ -80,7 +80,7 @@ Options:
         --power-hibernate 'CMD [ARGS]...'
                         command to run to hibernate the system
         --power-no-setsid
-                        do not prefix power commands with setsid
+                        do not start power commands in a new session
         --mock          run without greetd and simulate authentication for
                         visual testing
         --kb-command [1-12]
@@ -269,7 +269,9 @@ suspend = false
 
 Omitting a power field selects the automatically detected default. Setting it to `false` disables and hides that action, including its default. Legacy command strings are still accepted for compatibility and use the same shell-quoting parser as the command-line options; they are never executed by a shell.
 
-Note that, by default, all commands are prefixed with `setsid` to completely detach the command from our TTY. If you would prefer to run the commands as is, or if `setsid` does not exist on your system, you can use `--power-no-setsid`.
+By default, each power command is detached from the TTY in a new session and process group using the `setsid(2)` system call; no external `setsid` binary is invoked. Use `--power-no-setsid` to disable this isolation.
+
+The waiting screen is drawn before a command starts. Press Esc to cancel it. Commands time out after 30 seconds; cancellation and timeout send SIGTERM, then escalate to SIGKILL after 500 ms. With the default session isolation, signals cover the whole command process group.
 
 ### Visual mock mode
 

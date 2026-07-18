@@ -176,8 +176,14 @@ tuigreet - A graphical console greeter for greetd
 	pipelines, redirection, and environment assignments are not interpreted.
 
 *--power-no-setsid*
-	Do not prefix power commands with *setsid*, which is used to detach it from
-	current TTY.
+	Do not start power commands in a new session and process group. By default,
+	tuigreet calls *setsid(2)* internally to detach them from the current TTY; it
+	does not invoke an external *setsid* binary.
+
+	The waiting screen is drawn before a power command starts. Press Escape to
+	cancel it. Commands time out after 30 seconds. Cancellation and timeout send
+	SIGTERM, then SIGKILL after 500 ms; with session isolation this covers the
+	whole process group.
 
 *--mock*
 	Run without connecting to greetd and simulate authentication locally for

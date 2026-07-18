@@ -25,10 +25,20 @@ use crate::{
 // application. It takes a reference to the `Greeter` so it can be aware of the
 // current state of the application and act accordinly; It also receives the
 // `Ipc` interface so it is able to interact with `greetd` if necessary.
+#[cfg(test)]
 pub async fn handle(
   greeter: Arc<RwLock<Greeter>>,
   input: KeyEvent,
   ipc: Ipc,
+) -> Result<Option<Control>, Box<dyn Error>> {
+  handle_with_power(greeter, input, ipc, false).await
+}
+
+pub async fn handle_with_power(
+  greeter: Arc<RwLock<Greeter>>,
+  input: KeyEvent,
+  ipc: Ipc,
+  power_active: bool,
 ) -> Result<Option<Control>, Box<dyn Error>> {
   // Some terminals report a second event when a key is released. Acting on
   // both events would duplicate text input and actions. Repeats, however, are
@@ -51,6 +61,16 @@ pub async fn handle(
     && c.eq_ignore_ascii_case(&'x')
   {
     return Ok(Some(Control::Exit(crate::AuthStatus::Cancel)));
+  }
+
+  // A power command is independent of the greetd/PAM transaction. While it
+  // is active, Esc targets only that command and all other ordinary input is
+  // ignored. The debug exit above intentionally remains available.
+  if power_active {
+    return match input {
+      KeyEvent { code: KeyCode::Esc, .. } => Ok(Some(Control::CancelPower)),
+      _ => Ok(None),
+    };
   }
 
   if let KeyEvent { code: KeyCode::Esc, .. } = input {
@@ -525,15 +545,16 @@ mod test {
   use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
   use tokio::{sync::RwLock, time::Duration};
 
-  use super::{Completion, common_prefix, complete_username, delete, handle, insert};
+  use super::{Completion, common_prefix, complete_username, delete, handle, handle_with_power, insert};
   #[cfg(debug_assertions)]
   use crate::{
     AuthStatus,
-    event::{Control, Events, fill_event_queue},
+    event::{Events, fill_event_queue},
   };
   use crate::{
     Greeter,
     Mode,
+    event::Control,
     ipc::Ipc,
     power::PowerOption,
     ui::{
@@ -698,6 +719,75 @@ mod test {
     .unwrap();
 
     assert_eq!(greeter.read().await.auth_state, crate::ipc::AuthState::Cancelling);
+  }
+
+  #[tokio::test]
+  async fn power_processing_keys_do_not_touch_the_greetd_transaction() {
+    let mut state = Greeter::default();
+    state.mode = Mode::Processing;
+    state.auth_state = crate::ipc::AuthState::ContinuingAuth;
+    let greeter = Arc::new(RwLock::new(state));
+
+    let control = handle_with_power(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+      Ipc::new(),
+      true,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(control, Some(Control::CancelPower)));
+    assert_eq!(greeter.read().await.auth_state, crate::ipc::AuthState::ContinuingAuth);
+
+    let control = handle_with_power(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::F(12), KeyModifiers::empty()),
+      Ipc::new(),
+      true,
+    )
+    .await
+    .unwrap();
+    assert!(control.is_none());
+    assert_eq!(greeter.read().await.mode, Mode::Processing);
+  }
+
+  #[tokio::test]
+  async fn processing_escape_still_cancels_greetd_without_a_power_command() {
+    let mut state = Greeter::default();
+    state.mode = Mode::Processing;
+    state.auth_state = crate::ipc::AuthState::ContinuingAuth;
+    let greeter = Arc::new(RwLock::new(state));
+
+    let control = handle_with_power(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+      Ipc::new(),
+      false,
+    )
+    .await
+    .unwrap();
+
+    assert!(control.is_none());
+    assert_eq!(greeter.read().await.auth_state, crate::ipc::AuthState::Cancelling);
+  }
+
+  #[tokio::test]
+  #[cfg(debug_assertions)]
+  async fn debug_exit_remains_available_during_a_power_command() {
+    let mut state = Greeter::default();
+    state.mode = Mode::Processing;
+    state.auth_state = crate::ipc::AuthState::ContinuingAuth;
+
+    let control = handle_with_power(
+      Arc::new(RwLock::new(state)),
+      KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+      Ipc::new(),
+      true,
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(control, Some(Control::Exit(AuthStatus::Cancel))));
   }
 
   #[tokio::test]

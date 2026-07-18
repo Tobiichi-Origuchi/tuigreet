@@ -25,7 +25,6 @@ use std::{env, error::Error, io, process, sync::Arc, time::Duration};
 
 use event::{Control, Event};
 use ipc::AuthState;
-use power::PowerPostAction;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::sync::{RwLock, mpsc};
 
@@ -80,6 +79,8 @@ where
   }
   let greeter = Arc::new(RwLock::new(greeter));
   let mut reloads = reload::ReloadCoordinator::new()?;
+  let mut power_supervisor = power::PowerSupervisor::new();
+  let mut power_return_state = None;
 
   #[cfg(not(test))]
   watcher::spawn(config::watched_paths(greeter.read().await.config()), events.sender());
@@ -139,6 +140,19 @@ where
         signal = termination_signals.recv() => {
           tracing::warn!("received {signal}, shutting down");
           Some(Control::Exit(AuthStatus::Failure))
+        },
+
+        outcome = power_supervisor.next(), if power_supervisor.has_active() => {
+          let Some(return_state) = power_return_state.take() else {
+            break Err("power command completed without a return state".into());
+          };
+          if finish_power(&mut *greeter.write().await, return_state, outcome) {
+            break Ok(None);
+          }
+          ui::draw(greeter.clone(), &mut terminal, cursor_on)
+            .await
+            .map_err(|error| error.to_string())?;
+          None
         },
 
         outcome = reloads.next(), if reloads.has_pending() => {
@@ -227,9 +241,11 @@ where
               .map_err(|error| error.to_string())?;
             None
           },
-          Some(Event::Key(key)) => keyboard::handle(greeter.clone(), key, ipc.clone())
-            .await
-            .map_err(|error| error.to_string())?,
+          Some(Event::Key(key)) => {
+            keyboard::handle_with_power(greeter.clone(), key, ipc.clone(), power_supervisor.has_active())
+              .await
+              .map_err(|error| error.to_string())?
+          },
           Some(Event::ReloadConfig) => {
             let (config, snapshot) = {
               let greeter = greeter.read().await;
@@ -250,9 +266,32 @@ where
 
       match control {
         Some(Control::Exit(status)) => crate::exit(&mut *greeter.write().await, status, &ipc),
-        Some(Control::PowerCommand(command)) => {
-          if let PowerPostAction::ClearScreen = power::run(&greeter, *command).await {
-            break Ok(None);
+        Some(Control::PowerCommand(request)) => {
+          if power_supervisor.has_active() {
+            tracing::warn!("ignored a second power command while one is already running");
+          } else {
+            let return_state = begin_power(&mut *greeter.write().await);
+            ui::draw(greeter.clone(), &mut terminal, cursor_on)
+              .await
+              .map_err(|error| error.to_string())?;
+            match power_supervisor.start(request) {
+              Ok(()) => power_return_state = Some(return_state),
+              Err(error) => {
+                finish_power(
+                  &mut *greeter.write().await,
+                  return_state,
+                  power::PowerOutcome::Failed(power::PowerFailure::Worker(error.to_string())),
+                );
+                ui::draw(greeter.clone(), &mut terminal, cursor_on)
+                  .await
+                  .map_err(|error| error.to_string())?;
+              },
+            }
+          }
+        },
+        Some(Control::CancelPower) => {
+          if !power_supervisor.cancel() {
+            tracing::debug!("ignored power cancellation without an active command");
           }
         },
         None => {},
@@ -261,6 +300,7 @@ where
   }
   .await;
 
+  power_supervisor.shutdown().await;
   ipc.shutdown();
   if !ipc_actor_finished && let Err(error) = ipc_actor.await {
     tracing::error!("greetd IPC actor failed during shutdown: {error}");
@@ -269,6 +309,55 @@ where
   match exit_status {
     Some(status) => Err(status.into()),
     None => Ok(()),
+  }
+}
+
+struct PowerReturnState {
+  mode: Mode,
+  message: Option<String>,
+}
+
+fn begin_power(greeter: &mut Greeter) -> PowerReturnState {
+  let state = PowerReturnState {
+    mode: greeter.mode,
+    message: greeter.message.take(),
+  };
+  greeter.mode = Mode::Processing;
+  state
+}
+
+/// Apply a completed power command. `true` means the application should exit.
+fn finish_power(greeter: &mut Greeter, state: PowerReturnState, outcome: power::PowerOutcome) -> bool {
+  match outcome {
+    power::PowerOutcome::Success => true,
+    power::PowerOutcome::Cancelled => {
+      greeter.mode = state.mode;
+      greeter.message = state.message;
+      false
+    },
+    power::PowerOutcome::Failed(failure) => {
+      greeter.mode = state.mode;
+      greeter.message = Some(match failure {
+        power::PowerFailure::Spawn(error) | power::PowerFailure::Wait(error) | power::PowerFailure::Worker(error) => {
+          format!("{}: {error}", greeter.text.command_failed)
+        },
+        power::PowerFailure::Exit(status) => format!("{} {status}", greeter.text.command_exited),
+        power::PowerFailure::Timeout(duration) => format!(
+          "{}: timed out after {}",
+          greeter.text.command_failed,
+          format_power_duration(duration)
+        ),
+      });
+      false
+    },
+  }
+}
+
+fn format_power_duration(duration: Duration) -> String {
+  if duration.subsec_nanos() == 0 {
+    format!("{} seconds", duration.as_secs())
+  } else {
+    format!("{duration:?}")
   }
 }
 
@@ -303,4 +392,56 @@ fn exit(greeter: &mut Greeter, status: AuthStatus, ipc: &Ipc) {
   }
 
   greeter.exit = Some(status);
+}
+
+#[cfg(test)]
+mod power_state_tests {
+  use std::time::Duration;
+
+  use super::*;
+
+  #[test]
+  fn power_cancellation_restores_the_exact_mode_and_message() {
+    let mut greeter = Greeter::default();
+    greeter.mode = Mode::Password;
+    greeter.message = Some("existing message".into());
+
+    let state = begin_power(&mut greeter);
+    assert_eq!(greeter.mode, Mode::Processing);
+    assert!(greeter.message.is_none());
+    assert!(!finish_power(&mut greeter, state, power::PowerOutcome::Cancelled));
+    assert_eq!(greeter.mode, Mode::Password);
+    assert_eq!(greeter.message.as_deref(), Some("existing message"));
+  }
+
+  #[test]
+  fn power_failures_restore_the_mode_and_replace_the_message() {
+    let mut greeter = Greeter::default();
+    greeter.mode = Mode::Action;
+    greeter.message = Some("old".into());
+
+    let state = begin_power(&mut greeter);
+    assert!(!finish_power(
+      &mut greeter,
+      state,
+      power::PowerOutcome::Failed(power::PowerFailure::Timeout(Duration::from_secs(30))),
+    ));
+    assert_eq!(greeter.mode, Mode::Action);
+    assert!(
+      greeter
+        .message
+        .as_deref()
+        .unwrap()
+        .contains("timed out after 30 seconds")
+    );
+    assert!(!greeter.message.as_deref().unwrap().contains("old"));
+  }
+
+  #[test]
+  fn successful_power_commands_request_application_exit() {
+    let mut greeter = Greeter::default();
+    let state = begin_power(&mut greeter);
+
+    assert!(finish_power(&mut greeter, state, power::PowerOutcome::Success));
+  }
 }

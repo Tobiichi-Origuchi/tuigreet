@@ -263,6 +263,8 @@ async fn real_process_completes_greetd_protocol_and_restores_terminal() {
       "PROCESS_TEST=1",
       "--env",
       "DISPLAY=:99",
+      "--session-wrapper",
+      "process-wrapper --setup",
       "--allow-command-editor",
       "--no-xsession-wrapper",
     ],
@@ -286,7 +288,7 @@ async fn real_process_completes_greetd_protocol_and_restores_terminal() {
   assert_eq!(exchange, IpcExchange {
     username: "alice".into(),
     response: Some("correct horse".into()),
-    command: vec!["process-session --flag".into()],
+    command: vec!["process-wrapper --setup process-session --flag".into()],
     environment: vec!["PROCESS_TEST=1".into(), "DISPLAY=:99".into()],
   });
 }

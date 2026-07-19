@@ -828,14 +828,13 @@ fn wrap_session_command<'a>(
     },
 
     _ => {
-      // If a wrapper script is used, assume that it is able to set up the
-      // required environment.
+      // The configured environment belongs to the default command regardless
+      // of whether that command is wrapped.
+      if let Some(base_env) = default.env() {
+        env.extend(base_env.iter().cloned());
+      }
       if let Some(ref wrap) = greeter.session_wrapper {
         return (Cow::Owned(format!("{} {}", wrap, default.command())), env);
-      }
-      // Otherwise, set up the environment from the provided argument.
-      if let Some(base_env) = default.env() {
-        env.append(&mut base_env.clone());
       }
     },
   }
@@ -1420,6 +1419,19 @@ mod test {
 
     assert_eq!(command.as_ref(), "Session1Cmd");
     assert_eq!(env, vec!["XDG_SESSION_TYPE=wayland"]);
+  }
+
+  #[test]
+  fn default_command_wrapper_preserves_configured_environment() {
+    let mut greeter = Greeter::default();
+    greeter.session_wrapper = Some("/wrapper.sh --flag".into());
+    let environment = vec!["DISPLAY=:7".into(), "XDG_CURRENT_DESKTOP=custom".into()];
+    let default = DefaultCommand("default-session --argument", Some(environment.clone()));
+
+    let (command, env) = wrap_session_command(&greeter, None, &default);
+
+    assert_eq!(command.as_ref(), "/wrapper.sh --flag default-session --argument");
+    assert_eq!(env, environment);
   }
 
   #[test]

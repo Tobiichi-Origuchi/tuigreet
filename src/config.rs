@@ -423,27 +423,22 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
     settings.remember = true;
   }
 
-  let mut keys = [settings.kb_command, settings.kb_sessions, settings.kb_power];
-  for (index, value) in [layer.kb_command, layer.kb_sessions, layer.kb_power]
-    .into_iter()
-    .enumerate()
-  {
-    if let Some(value) = value {
-      let old = keys[index];
-      keys[index] = value;
-      if keys
-        .iter()
-        .enumerate()
-        .any(|(other, key)| other != index && *key == value)
-      {
-        warnings.push(format!(
-          "{source}: duplicate keybinding F{value}; ignoring the conflicting field"
-        ));
-        keys[index] = old;
-      }
+  let key_layer = [layer.kb_command, layer.kb_sessions, layer.kb_power];
+  if key_layer.iter().any(Option::is_some) {
+    let keys = [
+      layer.kb_command.unwrap_or(settings.kb_command),
+      layer.kb_sessions.unwrap_or(settings.kb_sessions),
+      layer.kb_power.unwrap_or(settings.kb_power),
+    ];
+    if keys[0] == keys[1] || keys[0] == keys[2] || keys[1] == keys[2] {
+      warnings.push(format!(
+        "{source}: duplicate keybindings in candidate (command=F{}, sessions=F{}, power=F{}); ignoring all keybinding fields from this layer",
+        keys[0], keys[1], keys[2]
+      ));
+    } else {
+      [settings.kb_command, settings.kb_sessions, settings.kb_power] = keys;
     }
   }
-  [settings.kb_command, settings.kb_sessions, settings.kb_power] = keys;
 }
 
 fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
@@ -1331,6 +1326,72 @@ mod tests {
     assert_eq!(from_cli.command.as_deref(), Some("  cli-command --flag  "));
     assert_eq!(from_cli.session_wrapper.as_deref(), Some("  cli-wrapper  "));
     assert_eq!(from_cli.xsession_wrapper.as_deref(), Some("  cli-xwrapper  "));
+  }
+
+  #[test]
+  fn toml_keybinding_layer_accepts_an_atomic_swap() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    let explicit = dir.path().join("explicit.toml");
+    write(&system, "[keybindings]\ncommand = 1\nsessions = 2\npower = 3\n");
+    write(&explicit, "[keybindings]\ncommand = 2\nsessions = 1\n");
+
+    let (settings, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+      (settings.kb_command, settings.kb_sessions, settings.kb_power),
+      (2, 1, 3)
+    );
+  }
+
+  #[test]
+  fn cli_keybinding_layer_accepts_an_atomic_cycle() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    write(&system, "[keybindings]\ncommand = 1\nsessions = 2\npower = 3\n");
+    let cli = matches(&["--kb-command", "2", "--kb-sessions", "3", "--kb-power", "1"]);
+
+    let (settings, warnings) = load_paths(Some(&system), None, &cli);
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+      (settings.kb_command, settings.kb_sessions, settings.kb_power),
+      (2, 3, 1)
+    );
+  }
+
+  #[test]
+  fn duplicate_keybinding_candidates_roll_back_the_whole_layer() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    let explicit = dir.path().join("explicit.toml");
+    write(&system, "[keybindings]\ncommand = 1\nsessions = 2\npower = 3\n");
+    // The unchanged power binding participates in validation. Although
+    // command=4 is independently valid, sessions=3 conflicts with power=3,
+    // so neither update may be committed.
+    write(&explicit, "[keybindings]\ncommand = 4\nsessions = 3\n");
+
+    let (from_toml, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
+
+    assert_eq!(
+      (from_toml.kb_command, from_toml.kb_sessions, from_toml.kb_power),
+      (1, 2, 3)
+    );
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("command=F4, sessions=F3, power=F3"));
+    assert!(warnings[0].contains("ignoring all keybinding fields"));
+
+    let cli = matches(&["--kb-command", "4", "--kb-sessions", "3"]);
+    let (from_cli, warnings) = load_paths(Some(&system), None, &cli);
+
+    assert_eq!(
+      (from_cli.kb_command, from_cli.kb_sessions, from_cli.kb_power),
+      (1, 2, 3)
+    );
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("command line"));
+    assert!(warnings[0].contains("ignoring all keybinding fields"));
   }
 
   #[test]

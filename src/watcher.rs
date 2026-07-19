@@ -293,7 +293,7 @@ fn fingerprints(paths: &[PathBuf]) -> Vec<Fingerprint> {
 
 #[cfg(test)]
 mod tests {
-  use std::fs;
+  use std::{fs, future::Future, task::Poll};
 
   use tempfile::tempdir;
 
@@ -407,36 +407,51 @@ mod tests {
     let directory = tempdir().unwrap();
     let path = directory.path().join("config.toml");
     fs::write(&path, b"original").unwrap();
-    let mut timings = test_timings();
-    timings.settle_delay = Duration::from_millis(80);
-    timings.max_settle_time = Duration::from_millis(160);
-    let baseline = ConfigWatcher::capture(vec![path.clone()]);
-    let mut watcher = ConfigWatcher::spawn_with_timings(baseline, timings);
-
     fs::write(&path, b"temporary").unwrap();
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    let candidate = fingerprints(std::slice::from_ref(&path));
     fs::write(&path, b"original").unwrap();
-    assert!(timeout(Duration::from_millis(220), watcher.next()).await.is_err());
+    let expected = fingerprints(std::slice::from_ref(&path));
+    assert_ne!(candidate, expected);
 
-    fs::write(&path, b"final").unwrap();
-    changed(&mut watcher).await;
-    watcher.shutdown().await;
+    let mut timings = test_timings();
+    timings.settle_delay = Duration::ZERO;
+    let (_shutdown, mut shutdown) = oneshot::channel();
+
+    let settled = timeout(
+      Duration::from_secs(1),
+      settle(std::slice::from_ref(&path), candidate, &mut shutdown, timings),
+    )
+    .await
+    .expect("settling a reverted change timed out")
+    .expect("settling stopped unexpectedly");
+
+    assert_eq!(settled, expected);
   }
 
   #[tokio::test]
   async fn shutdown_interrupts_settling() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("config.toml");
-    fs::write(&path, b"original").unwrap();
+    fs::write(&path, b"candidate").unwrap();
+    let candidate = fingerprints(std::slice::from_ref(&path));
     let mut timings = test_timings();
     timings.settle_delay = Duration::from_secs(5);
-    let baseline = ConfigWatcher::capture(vec![path.clone()]);
-    let mut watcher = ConfigWatcher::spawn_with_timings(baseline, timings);
-    fs::write(&path, b"changed").unwrap();
-    tokio::time::sleep(Duration::from_millis(30)).await;
-    timeout(Duration::from_millis(150), watcher.shutdown())
+    timings.max_settle_time = Duration::from_secs(5);
+    let (shutdown, mut shutdown_rx) = oneshot::channel();
+    let settling = settle(std::slice::from_ref(&path), candidate, &mut shutdown_rx, timings);
+    tokio::pin!(settling);
+
+    std::future::poll_fn(|context| {
+      assert!(settling.as_mut().poll(context).is_pending());
+      Poll::Ready(())
+    })
+    .await;
+    shutdown.send(()).unwrap();
+
+    let settled = timeout(Duration::from_millis(150), &mut settling)
       .await
-      .expect("watcher shutdown was blocked by settling");
+      .expect("shutdown was blocked by settling");
+    assert!(settled.is_none());
   }
 
   #[test]

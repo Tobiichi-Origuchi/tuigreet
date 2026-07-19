@@ -291,6 +291,90 @@ async fn real_process_completes_greetd_protocol_and_restores_terminal() {
   });
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_session_disconnect_reconnects_and_retries_safely() {
+  let temp = TempDir::new().expect("failed to create process-test directory");
+  let config = temp.path().join("config.toml");
+  write_config(&config, real_config("PROCESS-RECONNECT"));
+  let socket = temp.path().join("greetd.sock");
+  let listener = UnixListener::bind(&socket).expect("failed to bind greetd test socket");
+  let server = tokio::spawn(serve_authentication_after_create_disconnect(listener));
+
+  let mut process = PtyProcess::spawn(
+    [
+      "--config",
+      config.to_str().expect("non-UTF-8 test path"),
+      "--cmd",
+      "reconnected-session",
+      "--allow-command-editor",
+      "--no-xsession-wrapper",
+    ],
+    &[("GREETD_SOCK", socket.as_os_str())],
+  );
+  process.wait_for_output("Username:");
+  process.send(b"alice\r");
+  process.wait_for_output("Password:");
+  process.send(b"retry-secret\r");
+
+  let status = process.wait();
+  assert_eq!(status.code(), Some(0), "output:\n{}", process.output_text());
+  process.assert_terminal_restored();
+
+  let exchange = tokio::time::timeout(PROCESS_TIMEOUT, server)
+    .await
+    .expect("greetd reconnect server timed out")
+    .expect("greetd reconnect server panicked")
+    .expect("greetd reconnect server failed");
+  assert_eq!(exchange, IpcExchange {
+    username: "alice".into(),
+    response: Some("retry-secret".into()),
+    command: vec!["reconnected-session".into()],
+    environment: Vec::new(),
+  });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_session_disconnect_is_not_replayed_and_restores_terminal() {
+  let temp = TempDir::new().expect("failed to create process-test directory");
+  let config = temp.path().join("config.toml");
+  write_config(&config, real_config("PROCESS-START-DISCONNECT"));
+  let socket = temp.path().join("greetd.sock");
+  let listener = UnixListener::bind(&socket).expect("failed to bind greetd test socket");
+  let server = tokio::spawn(serve_start_disconnect(listener));
+
+  let mut process = PtyProcess::spawn(
+    [
+      "--config",
+      config.to_str().expect("non-UTF-8 test path"),
+      "--cmd",
+      "uncertain-session",
+      "--allow-command-editor",
+      "--no-xsession-wrapper",
+    ],
+    &[("GREETD_SOCK", socket.as_os_str())],
+  );
+  process.wait_for_output("Username:");
+  process.send(b"alice\r");
+  process.wait_for_output("Password:");
+  process.send(b"one-shot-secret\r");
+
+  let status = process.wait();
+  assert_eq!(status.code(), Some(1), "output:\n{}", process.output_text());
+  process.assert_terminal_restored();
+
+  let exchange = tokio::time::timeout(PROCESS_TIMEOUT, server)
+    .await
+    .expect("greetd disconnect server timed out")
+    .expect("greetd disconnect server panicked")
+    .expect("greetd disconnect server failed");
+  assert_eq!(exchange, IpcExchange {
+    username: "alice".into(),
+    response: Some("one-shot-secret".into()),
+    command: vec!["uncertain-session".into()],
+    environment: Vec::new(),
+  });
+}
+
 #[test]
 fn atomic_config_reload_rejects_invalid_data_then_recovers() {
   let temp = TempDir::new().expect("failed to create process-test directory");
@@ -426,7 +510,49 @@ fn information_actions_need_neither_tty_nor_greetd_socket() {
 async fn serve_authentication(listener: UnixListener) -> Result<IpcExchange, String> {
   let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
 
-  let username = match Request::read_from(&mut stream)
+  authenticate_and_start(&mut stream).await
+}
+
+async fn serve_authentication_after_create_disconnect(listener: UnixListener) -> Result<IpcExchange, String> {
+  let (mut abandoned, _) = listener.accept().await.map_err(|error| error.to_string())?;
+  match Request::read_from(&mut abandoned)
+    .await
+    .map_err(|error| error.to_string())?
+  {
+    Request::CreateSession { username } if username == "alice" => {},
+    request => return Err(format!("expected initial CreateSession, received {request:?}")),
+  }
+  drop(abandoned);
+
+  let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
+  authenticate_and_start(&mut stream).await
+}
+
+async fn serve_start_disconnect(listener: UnixListener) -> Result<IpcExchange, String> {
+  let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
+  let exchange = authenticate_until_start(&mut stream).await?;
+  drop(stream);
+
+  if tokio::time::timeout(Duration::from_millis(500), listener.accept())
+    .await
+    .is_ok()
+  {
+    return Err("tuigreet reconnected after an uncertain StartSession".into());
+  }
+  Ok(exchange)
+}
+
+async fn authenticate_and_start(stream: &mut tokio::net::UnixStream) -> Result<IpcExchange, String> {
+  let exchange = authenticate_until_start(stream).await?;
+  Response::Success
+    .write_to(stream)
+    .await
+    .map_err(|error| error.to_string())?;
+  Ok(exchange)
+}
+
+async fn authenticate_until_start(stream: &mut tokio::net::UnixStream) -> Result<IpcExchange, String> {
+  let username = match Request::read_from(&mut *stream)
     .await
     .map_err(|error| error.to_string())?
   {
@@ -437,11 +563,11 @@ async fn serve_authentication(listener: UnixListener) -> Result<IpcExchange, Str
     auth_message_type: AuthMessageType::Secret,
     auth_message: "Password: ".into(),
   }
-  .write_to(&mut stream)
+  .write_to(&mut *stream)
   .await
   .map_err(|error| error.to_string())?;
 
-  let response = match Request::read_from(&mut stream)
+  let response = match Request::read_from(&mut *stream)
     .await
     .map_err(|error| error.to_string())?
   {
@@ -449,22 +575,17 @@ async fn serve_authentication(listener: UnixListener) -> Result<IpcExchange, Str
     request => return Err(format!("expected PostAuthMessageResponse, received {request:?}")),
   };
   Response::Success
-    .write_to(&mut stream)
+    .write_to(&mut *stream)
     .await
     .map_err(|error| error.to_string())?;
 
-  let (command, environment) = match Request::read_from(&mut stream)
+  let (command, environment) = match Request::read_from(&mut *stream)
     .await
     .map_err(|error| error.to_string())?
   {
     Request::StartSession { cmd, env } => (cmd, env),
     request => return Err(format!("expected StartSession, received {request:?}")),
   };
-  Response::Success
-    .write_to(&mut stream)
-    .await
-    .map_err(|error| error.to_string())?;
-
   Ok(IpcExchange {
     username,
     response,

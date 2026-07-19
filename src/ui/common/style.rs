@@ -2,12 +2,15 @@ use std::str::FromStr;
 
 use ratatui::style::{Color, Style};
 
+use crate::config::{ThemeColor, ThemeSettings};
+
 #[derive(Clone)]
 enum Component {
   Bg,
   Fg,
 }
 
+#[derive(Clone, Copy)]
 pub enum Themed {
   Container,
   Time,
@@ -36,44 +39,29 @@ pub struct Theme {
 }
 
 impl Theme {
-  pub fn parse(spec: &str) -> Theme {
+  pub fn from_settings(settings: &ThemeSettings) -> Theme {
     use Component::*;
 
-    let directives = spec.split(';').filter_map(|directive| directive.split_once('='));
-    let mut style = Theme::default();
+    let text = themed(&settings.text, Fg);
+    let border = themed(&settings.border, Fg);
+    let action = themed(&settings.action, Fg);
+    let time = themed_or(&settings.time, &text, Fg);
+    let greet = themed_or(&settings.greet, &text, Fg);
+    let title = themed_or(&settings.title, &border, Fg);
+    let button = themed_or(&settings.button, &action, Fg);
 
-    for (key, value) in directives {
-      if let Ok(color) = Color::from_str(value) {
-        match key {
-          "container" => style.container = Some((Bg, color)),
-          "time" => style.time = Some((Fg, color)),
-          "text" => style.text = Some((Fg, color)),
-          "border" => style.border = Some((Fg, color)),
-          "title" => style.title = Some((Fg, color)),
-          "greet" => style.greet = Some((Fg, color)),
-          "prompt" => style.prompt = Some((Fg, color)),
-          "input" => style.input = Some((Fg, color)),
-          "action" => style.action = Some((Fg, color)),
-          "button" => style.button = Some((Fg, color)),
-          _ => {},
-        }
-      }
+    Theme {
+      container: themed(&settings.container, Bg),
+      time,
+      text,
+      border,
+      title,
+      greet,
+      prompt: themed(&settings.prompt, Fg),
+      input: themed(&settings.input, Fg),
+      action,
+      button,
     }
-
-    if style.time.is_none() {
-      style.time.clone_from(&style.text);
-    }
-    if style.greet.is_none() {
-      style.greet.clone_from(&style.text);
-    }
-    if style.title.is_none() {
-      style.title.clone_from(&style.border);
-    }
-    if style.button.is_none() {
-      style.button.clone_from(&style.action);
-    }
-
-    style
   }
 
   pub fn of(&self, targets: &[Themed]) -> Style {
@@ -106,5 +94,49 @@ impl Theme {
 
       None => style,
     }
+  }
+}
+
+fn themed(setting: &ThemeColor, component: Component) -> Option<(Component, Color)> {
+  let ThemeColor::Value(value) = setting else {
+    return None;
+  };
+  Color::from_str(value).ok().map(|color| (component, color))
+}
+
+fn themed_or(
+  setting: &ThemeColor,
+  fallback: &Option<(Component, Color)>,
+  component: Component,
+) -> Option<(Component, Color)> {
+  match setting {
+    ThemeColor::Unset => fallback.clone(),
+    ThemeColor::Value(_) => themed(setting, component),
+    ThemeColor::Clear => None,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use ratatui::style::Color;
+
+  use super::{Theme, Themed};
+  use crate::config::{ThemeColor, ThemeSettings};
+
+  #[test]
+  fn theme_settings_distinguish_fallback_from_explicit_clear() {
+    let settings = ThemeSettings {
+      text: ThemeColor::Value("red".into()),
+      time: ThemeColor::Clear,
+      border: ThemeColor::Value("blue".into()),
+      ..ThemeSettings::default()
+    };
+
+    let theme = Theme::from_settings(&settings);
+
+    assert_eq!(theme.of(&[Themed::Text]).fg, Some(Color::Red));
+    assert_eq!(theme.of(&[Themed::Greet]).fg, Some(Color::Red));
+    assert_eq!(theme.of(&[Themed::Time]).fg, None);
+    assert_eq!(theme.of(&[Themed::Title]).fg, Some(Color::Blue));
   }
 }

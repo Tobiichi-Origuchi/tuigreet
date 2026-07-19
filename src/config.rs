@@ -156,16 +156,16 @@ struct Layer {
 
 #[derive(Default)]
 struct ThemeLayer {
-  border: Option<Option<String>>,
-  text: Option<Option<String>>,
-  time: Option<Option<String>>,
-  container: Option<Option<String>>,
-  title: Option<Option<String>>,
-  greet: Option<Option<String>>,
-  prompt: Option<Option<String>>,
-  input: Option<Option<String>>,
-  action: Option<Option<String>>,
-  button: Option<Option<String>>,
+  border: Option<ThemeColor>,
+  text: Option<ThemeColor>,
+  time: Option<ThemeColor>,
+  container: Option<ThemeColor>,
+  title: Option<ThemeColor>,
+  greet: Option<ThemeColor>,
+  prompt: Option<ThemeColor>,
+  input: Option<ThemeColor>,
+  action: Option<ThemeColor>,
+  button: Option<ThemeColor>,
 }
 
 pub(crate) fn load_from(system: Option<&Path>, matches: &Matches) -> (Settings, Vec<String>) {
@@ -488,7 +488,7 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
   layer.min_uid = cli_number::<u32>(matches, "user-menu-min-uid", 0, u32::MAX, warnings).map(Some);
   layer.max_uid = cli_number::<u32>(matches, "user-menu-max-uid", 0, u32::MAX, warnings).map(Some);
   if let Some(specification) = string("theme") {
-    layer.theme = theme_specification(&specification, "command line --theme", warnings);
+    layer.theme = parse_theme_layer(&specification, "command line --theme", warnings);
   }
   layer.asterisks = flag("asterisks");
   if let Some(value) = string("asterisks-char") {
@@ -640,7 +640,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
       "display",
     );
     if let Some(specification) = read_string(table, "theme", path, source, warnings, "display") {
-      layer.theme = theme_specification(&specification, "display.theme", warnings);
+      layer.theme = parse_theme_layer(&specification, "display.theme", warnings);
     }
   }
   if let Some(table) = read_table(document.as_table(), "remember", path, source, warnings) {
@@ -1099,10 +1099,10 @@ fn read_theme_color(
   path: &Path,
   source: &str,
   warnings: &mut Vec<String>,
-) -> Option<Option<String>> {
+) -> Option<ThemeColor> {
   let item = table.get(key)?;
   if item.as_bool() == Some(false) {
-    return Some(None);
+    return Some(ThemeColor::Clear);
   }
   let Some(value) = item.as_str() else {
     warn_item(
@@ -1115,7 +1115,7 @@ fn read_theme_color(
     return None;
   };
   if valid_color(value) {
-    Some(Some(value.to_string()))
+    Some(ThemeColor::Value(value.to_string()))
   } else {
     warn_item(
       Some(item),
@@ -1128,19 +1128,8 @@ fn read_theme_color(
   }
 }
 
-fn theme_specification(specification: &str, source: &str, warnings: &mut Vec<String>) -> ThemeLayer {
-  let mut theme = ThemeLayer {
-    border: Some(None),
-    text: Some(None),
-    time: Some(None),
-    container: Some(None),
-    title: Some(None),
-    greet: Some(None),
-    prompt: Some(None),
-    input: Some(None),
-    action: Some(None),
-    button: Some(None),
-  };
+fn parse_theme_layer(specification: &str, source: &str, warnings: &mut Vec<String>) -> ThemeLayer {
+  let mut theme = ThemeLayer::default();
   for directive in specification.split(';').filter(|directive| !directive.is_empty()) {
     let Some((key, value)) = directive.split_once('=') else {
       warnings.push(format!(
@@ -1148,10 +1137,6 @@ fn theme_specification(specification: &str, source: &str, warnings: &mut Vec<Str
       ));
       continue;
     };
-    if !valid_color(value) {
-      warnings.push(format!("{source}: invalid color '{value}' for '{key}'; ignoring it"));
-      continue;
-    }
     let destination = match key {
       "border" => &mut theme.border,
       "text" => &mut theme.text,
@@ -1168,7 +1153,11 @@ fn theme_specification(specification: &str, source: &str, warnings: &mut Vec<Str
         continue;
       },
     };
-    *destination = Some(Some(value.to_string()));
+    if !valid_color(value) {
+      warnings.push(format!("{source}: invalid color '{value}' for '{key}'; ignoring it"));
+      continue;
+    }
+    *destination = Some(ThemeColor::Value(value.to_string()));
   }
   theme
 }
@@ -1183,10 +1172,15 @@ fn split_paths(value: &str) -> Vec<String> {
 mod tests {
   use std::{fs, path::Path};
 
+  use ratatui::style::Color;
   use tempfile::tempdir;
 
-  use super::{load_paths, reload_paths};
-  use crate::{Greeter, power::PowerCommand};
+  use super::{ThemeColor, load_paths, reload_paths};
+  use crate::{
+    Greeter,
+    power::PowerCommand,
+    ui::common::style::{Theme, Themed},
+  };
 
   fn matches(args: &[&str]) -> getopts::Matches {
     Greeter::options().parse(args).unwrap()
@@ -1641,9 +1635,9 @@ mod tests {
     let (settings, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
 
     assert!(warnings.is_empty(), "{warnings:?}");
-    assert_eq!(settings.theme.border, None);
-    assert_eq!(settings.theme.text.as_deref(), Some("white"));
-    assert_eq!(settings.theme.prompt.as_deref(), Some("green"));
+    assert_eq!(settings.theme.border, ThemeColor::Clear);
+    assert_eq!(settings.theme.text, ThemeColor::Value("white".into()));
+    assert_eq!(settings.theme.prompt, ThemeColor::Value("green".into()));
   }
 
   #[test]
@@ -1656,43 +1650,97 @@ mod tests {
 
     let (settings, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
 
-    assert_eq!(settings.theme.border.as_deref(), Some("blue"));
+    assert_eq!(settings.theme.border, ThemeColor::Value("blue".into()));
     assert!(warnings.iter().any(|warning| warning.contains("invalid color")));
     assert!(warnings.iter().any(|warning| warning.contains("theme.unknown")));
   }
+
+  #[test]
+  fn partial_cli_theme_overlays_only_named_valid_components() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    write(&system, "[theme]\nborder = 'blue'\ntext = 'white'\ntime = 'yellow'\n");
+
+    let (settings, warnings) = load_paths(Some(&system), None, &matches(&["--theme", "prompt=red"]));
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let theme = Theme::from_settings(&settings.theme);
+    assert_eq!(theme.of(&[Themed::Border]).fg, Some(Color::Blue));
+    assert_eq!(theme.of(&[Themed::Text]).fg, Some(Color::White));
+    assert_eq!(theme.of(&[Themed::Time]).fg, Some(Color::Yellow));
+    assert_eq!(theme.of(&[Themed::Prompt]).fg, Some(Color::Red));
+  }
+
+  #[test]
+  fn invalid_cli_theme_directives_do_not_mutate_lower_colors() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    write(&system, "[theme]\nborder = 'blue'\ntext = 'white'\n");
+
+    let (settings, warnings) = load_paths(
+      Some(&system),
+      None,
+      &matches(&["--theme", "border=not-a-color;unknown=green;broken"]),
+    );
+
+    assert_eq!(warnings.len(), 3, "{warnings:?}");
+    let theme = Theme::from_settings(&settings.theme);
+    assert_eq!(theme.of(&[Themed::Border]).fg, Some(Color::Blue));
+    assert_eq!(theme.of(&[Themed::Text]).fg, Some(Color::White));
+    assert_eq!(settings.theme.prompt, ThemeColor::Unset);
+  }
+
+  #[test]
+  fn explicit_theme_clears_block_fallback_while_unset_components_inherit() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    let explicit = dir.path().join("explicit.toml");
+    write(&system, "[theme]\ntext = 'red'\nborder = 'blue'\naction = 'green'\n");
+
+    let (inherited, warnings) = load_paths(Some(&system), None, &matches(&[]));
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let inherited = Theme::from_settings(&inherited.theme);
+    assert_eq!(inherited.of(&[Themed::Time]).fg, Some(Color::Red));
+    assert_eq!(inherited.of(&[Themed::Greet]).fg, Some(Color::Red));
+    assert_eq!(inherited.of(&[Themed::Title]).fg, Some(Color::Blue));
+    assert_eq!(inherited.of(&[Themed::ActionButton]).fg, Some(Color::Green));
+
+    write(
+      &explicit,
+      "[theme]\ntime = false\ngreet = false\ntitle = false\nbutton = false\n",
+    );
+    let (cleared, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let cleared = Theme::from_settings(&cleared.theme);
+    assert_eq!(cleared.of(&[Themed::Text]).fg, Some(Color::Red));
+    assert_eq!(cleared.of(&[Themed::Border]).fg, Some(Color::Blue));
+    assert_eq!(cleared.of(&[Themed::Action]).fg, Some(Color::Green));
+    assert_eq!(cleared.of(&[Themed::Time]).fg, None);
+    assert_eq!(cleared.of(&[Themed::Greet]).fg, None);
+    assert_eq!(cleared.of(&[Themed::Title]).fg, None);
+    assert_eq!(cleared.of(&[Themed::ActionButton]).fg, None);
+  }
 }
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct ThemeSettings {
-  pub border: Option<String>,
-  pub text: Option<String>,
-  pub time: Option<String>,
-  pub container: Option<String>,
-  pub title: Option<String>,
-  pub greet: Option<String>,
-  pub prompt: Option<String>,
-  pub input: Option<String>,
-  pub action: Option<String>,
-  pub button: Option<String>,
+pub enum ThemeColor {
+  #[default]
+  Unset,
+  Value(String),
+  Clear,
 }
 
-impl ThemeSettings {
-  pub fn specification(&self) -> String {
-    let fields = [
-      ("border", &self.border),
-      ("text", &self.text),
-      ("time", &self.time),
-      ("container", &self.container),
-      ("title", &self.title),
-      ("greet", &self.greet),
-      ("prompt", &self.prompt),
-      ("input", &self.input),
-      ("action", &self.action),
-      ("button", &self.button),
-    ];
-    fields
-      .into_iter()
-      .filter_map(|(name, value)| value.as_ref().map(|value| format!("{name}={value}")))
-      .collect::<Vec<_>>()
-      .join(";")
-  }
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ThemeSettings {
+  pub border: ThemeColor,
+  pub text: ThemeColor,
+  pub time: ThemeColor,
+  pub container: ThemeColor,
+  pub title: ThemeColor,
+  pub greet: ThemeColor,
+  pub prompt: ThemeColor,
+  pub input: ThemeColor,
+  pub action: ThemeColor,
+  pub button: ThemeColor,
 }

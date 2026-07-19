@@ -1064,10 +1064,7 @@ impl Greeter {
     self.debug = settings.debug;
     self.logfile = settings.logfile.clone();
     self.ipc_timeout = settings.ipc_timeout;
-    let theme = settings.theme.specification();
-    if !theme.is_empty() {
-      self.theme = Theme::parse(&theme);
-    }
+    self.theme = Theme::from_settings(&settings.theme);
     self.secret_display = if settings.asterisks {
       SecretDisplay::Character(settings.asterisks_chars.clone())
     } else {
@@ -1160,7 +1157,7 @@ impl Greeter {
     let highlighted_power = self.powers.options.get(self.powers.selected).map(|power| power.action);
     let command_editor_disabled = self.allow_command_editor && !settings.allow_command_editor;
 
-    self.theme = Theme::parse(&settings.theme.specification());
+    self.theme = Theme::from_settings(&settings.theme);
     self.secret_display = if settings.asterisks {
       SecretDisplay::Character(settings.asterisks_chars.clone())
     } else {
@@ -1776,6 +1773,7 @@ mod test {
     path::PathBuf,
   };
 
+  use ratatui::style::Color;
   use tempfile::tempdir;
 
   use super::{
@@ -1795,11 +1793,11 @@ mod test {
     Mode,
     SecretDisplay,
     cache::CacheStore,
-    config::Settings,
+    config::{Settings, ThemeColor},
     power::{CommandLine, PowerCommand, PowerOption, default_command},
     text::Text,
     ui::{
-      common::menu::Menu,
+      common::{menu::Menu, style::Themed},
       sessions::{Session, SessionSource, SessionType},
       users::User,
     },
@@ -2018,7 +2016,7 @@ mod test {
       kb_command: 5,
       ..Default::default()
     };
-    settings.theme.text = Some("red".into());
+    settings.theme.text = ThemeColor::Value("red".into());
 
     let plan = ReloadPlan::prepare(greeter.reload_snapshot(), settings);
     let applied = greeter.apply_reload(plan);
@@ -2035,6 +2033,40 @@ mod test {
     assert_eq!(greeter.refresh_rate, 60);
     assert!(matches!(greeter.secret_display, SecretDisplay::Character(ref value) if value == "#"));
     assert_eq!(greeter.kb_command, 5);
+  }
+
+  #[tokio::test]
+  async fn startup_and_reload_construct_the_same_resolved_theme() {
+    let directory = tempdir().unwrap();
+    let config = directory.path().join("config.toml");
+    fs::write(&config, "[theme]\ntext = 'red'\ntime = false\nborder = 'blue'\n").unwrap();
+    let invocation = CliInvocation::parse([
+      "tuigreet",
+      "--config",
+      config.to_str().unwrap(),
+      "--theme",
+      "prompt=green",
+    ]);
+    let startup = Greeter::new_isolated(invocation.matches()).await;
+    let mut reloaded = Greeter::default();
+
+    reloaded.apply_reload(reload_plan(startup.settings.clone()));
+
+    for target in [
+      Themed::Text,
+      Themed::Time,
+      Themed::Greet,
+      Themed::Border,
+      Themed::Title,
+      Themed::Prompt,
+    ] {
+      assert_eq!(startup.theme.of(&[target]), reloaded.theme.of(&[target]));
+    }
+    assert_eq!(startup.theme.of(&[Themed::Text]).fg, Some(Color::Red));
+    assert_eq!(startup.theme.of(&[Themed::Time]).fg, None);
+    assert_eq!(startup.theme.of(&[Themed::Greet]).fg, Some(Color::Red));
+    assert_eq!(startup.theme.of(&[Themed::Title]).fg, Some(Color::Blue));
+    assert_eq!(startup.theme.of(&[Themed::Prompt]).fg, Some(Color::Green));
   }
 
   #[test]

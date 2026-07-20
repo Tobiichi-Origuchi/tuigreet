@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.11.1 - 2026-07-20
+
+### Added
+
+- [`36dfedc`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/36dfedc2d36dd3c1742e0320a1c7cb0b695b2464) Add explicit CLI overrides for disabling configured debug logging, issue and time display, remembered state, user discovery, secret feedback, mock mode, and power-command isolation.
+- [`f641dd0`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/f641dd0e520a180410ae53b179e8be159a797039) Add configurable login prompt titles with hostname-based, custom, and hidden modes.
+- [`75efc5d`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/75efc5d2e2e4a5c16390d3575a77c56ad7613a1c) Add an administrator-configured default username without requiring user enumeration or remembered state.
+- [`83c410f`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/83c410feb52c232332c608a44ef383c2ccf457c6) Add optional quiet session launch, discarding the authenticated session's standard output and error.
+- [`5943e28`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/5943e28706e866bd2c6c99bc0aabf7e46ae12ad2) Add non-fatal Num Lock activation for Linux virtual consoles.
+- [`b639688`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/b6396881a533fa12a02bef1e7b35d19ec8d5aace) Add battery status, configurable time and status-bar placement, and independent responsive controls for every status item.
+
+### Changed
+
+- [`761b674`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/761b67459fb48b582382f15d7ea016db7329438f) Keep configuration reload work off the async runtime and coalesce rapid updates to the latest bounded revision.
+- [`dcff56d`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/dcff56d6d0ca6b156264e9b5e1f00dd60933aec5) Calculate compatible multi-battery percentages from summed current and full capacities instead of averaging percentages.
+- [`44f7423`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/44f7423b82360f88dce784e191a9c173344af958) Cache static greeting, title, and status data and sample Caps Lock only when visible, reducing work during screen refreshes.
+
+### Fixed
+
+- [`533fa6a`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/533fa6a87ad886d2be5df7514110ebd367a7f6c1) Expand `/etc/issue` with a single-pass agetty-compatible subset, including `\S{PRETTY_NAME}`, and avoid an extra blank line before the prompt.
+- [`7c5f23a`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/7c5f23a12bfadbf2096974a3316ee74de2a09fec) Prevent an option missing its required value from consuming the valid option that follows it.
+- [`6ec4718`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/6ec47185cb879643b1ea3f3dedd14e57fbc109dc) Apply standard XDG session paths for empty variables and reject malformed Desktop Entry groups, keys, locales, duplicates, and control characters.
+- [`3534cf5`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/3534cf57aba84c853b7e2f73445b2e524c1a3f66) Reject NUL-containing commands, wrappers, environment entries, and usernames without erasing valid lower-priority configuration.
+- [`4635e8b`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/4635e8bd4c9c00b3074c3c67b88a0e95c8f31205) Write successful `--help` output to standard output while keeping diagnostics on standard error.
+- [`85e4c5f`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/85e4c5f3573933112472c592a95aaba0526afab5) Evaluate session `TryExec` availability using the greeter's effective execution permissions.
+- [`0339386`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/033938678c43355d5f2b1be3e724f8ae31e0996d) Reclaim the battery row when no battery is available and suppress stale battery data after the widget is disabled.
+
+### Security
+
+- [`4e5418a`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/4e5418aad6f2d04acaf62ae41d8ff027387791de) Redact PAM messages and greetd error descriptions from persistent debug logs.
+- [`3f7c9ff`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/3f7c9ff07c08336f4f578204b9f020736c0d80a3) Enforce an 8 MiB limit on incoming and outgoing greetd IPC frames before allocating or writing their bodies.
+- [`177b224`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/177b22411b5bc6b678c3c1d6e8bcd6b2ae89d957) Read configuration through one bounded regular-file transaction and warn about unsafe ownership, modes, ancestors, or replacement paths.
+
 ## 0.11.0 - 2026-07-20
 
 ### Added

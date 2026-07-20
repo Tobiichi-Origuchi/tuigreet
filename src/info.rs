@@ -498,7 +498,7 @@ fn effective_session_paths(
   paths
 }
 
-pub fn get_sessions(paths: &[(PathBuf, SessionType)]) -> Result<Vec<Session>, Box<dyn Error>> {
+pub fn get_sessions(paths: &[(PathBuf, SessionType)]) -> Vec<Session> {
   let mut files = Vec::new();
   let mut seen = HashSet::<(SessionType, OsString)>::new();
 
@@ -551,7 +551,7 @@ pub fn get_sessions(paths: &[(PathBuf, SessionType)]) -> Result<Vec<Session>, Bo
 
   tracing::info!("found {} sessions", files.len());
 
-  Ok(files)
+  files
 }
 
 fn load_desktop_file<P>(path: P, session_type: SessionType) -> Result<Option<Session>, Box<dyn Error>>
@@ -983,7 +983,7 @@ mod session_tests {
       (low.path().into(), SessionType::Wayland),
     ];
 
-    let sessions = get_sessions(&paths).unwrap();
+    let sessions = get_sessions(&paths);
     let slugs = sessions
       .iter()
       .map(|session| session.slug.as_deref().unwrap())

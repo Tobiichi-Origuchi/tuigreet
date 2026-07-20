@@ -97,6 +97,10 @@ impl IntegrationRunner {
 
       if let Some(builder) = builder {
         builder(&mut greeter);
+        // Test builders mutate otherwise configuration-derived fields
+        // directly, so rebuild the same derived render state production
+        // configuration application maintains.
+        greeter.refresh_render_cache();
       }
 
       greeter.logfile = "/tmp/tuigreet.log".to_string();

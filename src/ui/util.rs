@@ -8,9 +8,9 @@ use ratatui::{
 };
 
 use crate::{
-  GreetAlign,
   Greeter,
   Mode,
+  config::GreetAlign,
   ui::{
     common::style::{Theme, Themed},
     input,
@@ -70,7 +70,7 @@ fn owned_text(text: Text<'_>) -> Text<'static> {
   }
 }
 
-// Determinew whether the cursor should be shown or hidden from the current
+// Determine whether the cursor should be shown or hidden from the current
 // mode and configuration. Usually, we will show the cursor only when expecting
 // text entries from the user.
 pub fn should_hide_cursor(greeter: &Greeter) -> bool {

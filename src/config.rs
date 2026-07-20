@@ -30,7 +30,9 @@ const LOGIN_DEFS: &str = "/etc/login.defs";
 const DEFAULT_MIN_UID: u32 = 1000;
 const DEFAULT_MAX_UID: u32 = 60000;
 const DEFAULT_LOG_FILE: &str = "/tmp/tuigreet.log";
-const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
+// `startx` wants an absolute client path. Keep session commands unresolved by
+// passing them after the known no-op `/usr/bin/env` client.
+pub(crate) const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
 pub(crate) const MAX_CONFIG_SIZE: usize = 1024 * 1024;
 
 const CONFIG_SECTIONS: &[&str] = &[
@@ -308,6 +310,14 @@ pub enum HorizontalPosition {
   Right,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum GreetAlign {
+  Left,
+  #[default]
+  Center,
+  Right,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Settings {
   pub debug: bool,
@@ -347,7 +357,7 @@ pub struct Settings {
   pub window_padding: u16,
   pub container_padding: u16,
   pub prompt_padding: u16,
-  pub greet_align: String,
+  pub greet_align: GreetAlign,
   pub status_position: WidgetPosition,
   pub status_reset: bool,
   pub status_command: bool,
@@ -407,7 +417,7 @@ impl Default for Settings {
       window_padding: 0,
       container_padding: 1,
       prompt_padding: 1,
-      greet_align: "center".into(),
+      greet_align: GreetAlign::Center,
       status_position: WidgetPosition::Bottom,
       status_reset: true,
       status_command: true,
@@ -477,7 +487,7 @@ struct Layer {
   window_padding: Option<u16>,
   container_padding: Option<u16>,
   prompt_padding: Option<u16>,
-  greet_align: Option<String>,
+  greet_align: Option<GreetAlign>,
   status_position: Option<WidgetPosition>,
   status_reset: Option<bool>,
   status_command: Option<bool>,
@@ -1243,14 +1253,18 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
   layer.container_padding = cli_number(matches, "container-padding", 0, u16::MAX - 1, warnings);
   layer.prompt_padding = cli_number(matches, "prompt-padding", 0, u16::MAX, warnings);
   if let Some(value) = string("greet-align") {
-    if matches!(value.as_str(), "left" | "center" | "right") {
-      layer.greet_align = Some(value);
-    } else {
-      warnings.push(Diagnostic::command_line(
-        Some("--greet-align"),
-        format!("invalid value '{value}'; expected left, center, or right"),
-      ));
-    }
+    layer.greet_align = match value.as_str() {
+      "left" => Some(GreetAlign::Left),
+      "center" => Some(GreetAlign::Center),
+      "right" => Some(GreetAlign::Right),
+      _ => {
+        warnings.push(Diagnostic::command_line(
+          Some("--greet-align"),
+          format!("invalid value '{value}'; expected left, center, or right"),
+        ));
+        None
+      },
+    };
   }
   layer.status_position = cli_widget_position(matches, "status-position", warnings);
   layer.status_reset = cli_bool(matches, "status-reset", "no-status-reset", warnings);
@@ -1619,18 +1633,22 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     );
     layer.prompt_padding = read_u16(table, "prompt-padding", (0, u16::MAX), path, source, warnings, "layout");
     if let Some(value) = read_string(table, "greet-align", path, source, warnings, "layout") {
-      if matches!(value.as_str(), "left" | "center" | "right") {
-        layer.greet_align = Some(value);
-      } else {
-        warn_field_item(
-          table.get("greet-align"),
-          path,
-          source,
-          warnings,
-          "layout.greet-align",
-          "the value must be left, center, or right",
-        );
-      }
+      layer.greet_align = match value.as_str() {
+        "left" => Some(GreetAlign::Left),
+        "center" => Some(GreetAlign::Center),
+        "right" => Some(GreetAlign::Right),
+        _ => {
+          warn_field_item(
+            table.get("greet-align"),
+            path,
+            source,
+            warnings,
+            "layout.greet-align",
+            "the value must be left, center, or right",
+          );
+          None
+        },
+      };
     }
   }
   if let Some(table) = read_table(document.as_table(), "status", path, source, warnings) {
@@ -2568,6 +2586,25 @@ mod tests {
   }
 
   #[test]
+  fn greeting_alignment_is_parsed_before_layering() {
+    let directory = tempdir().unwrap();
+    let system = directory.path().join("system.toml");
+    write(&system, "[layout]\ngreet-align = 'left'\n");
+
+    let (from_file, warnings) = load_paths(Some(&system), None, &matches(&[]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(from_file.greet_align, super::GreetAlign::Left);
+
+    let (from_cli, warnings) = load_paths(Some(&system), None, &matches(&["--greet-align", "right"]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(from_cli.greet_align, super::GreetAlign::Right);
+
+    let (preserved, warnings) = load_paths(Some(&system), None, &matches(&["--greet-align", "diagonal"]));
+    assert_eq!(preserved.greet_align, super::GreetAlign::Left);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+  }
+
+  #[test]
   fn container_title_supports_hostname_custom_hidden_and_cli_replacement() {
     let directory = tempdir().unwrap();
     let system = directory.path().join("system.toml");
@@ -3366,7 +3403,7 @@ mod tests {
       window_padding: 0,
       container_padding: 1,
       prompt_padding: 1,
-      greet_align: "center".into(),
+      greet_align: super::GreetAlign::Center,
       status_position: super::WidgetPosition::Bottom,
       status_reset: true,
       status_command: true,

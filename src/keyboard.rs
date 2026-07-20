@@ -23,7 +23,7 @@ use crate::{
 //
 // This function will be called whenever a keyboard event was captured by the
 // application. It takes a reference to the `Greeter` so it can be aware of the
-// current state of the application and act accordinly; It also receives the
+// current state of the application and act accordingly; it also receives the
 // `Ipc` interface so it is able to interact with `greetd` if necessary.
 #[cfg(test)]
 pub async fn handle(
@@ -78,7 +78,7 @@ pub async fn handle_with_power(
       Mode::Command => greeter.close_command_editor(),
       Mode::Users | Mode::Sessions | Mode::Power => greeter.mode = greeter.previous_mode,
       _ if greeter.auth_state.can_cancel() => ipc.cancel(&mut greeter),
-      _ if greeter.auth_state.accepts_input() => greeter.reset(false).await,
+      _ if greeter.auth_state.accepts_input() => greeter.reset(false),
       _ => {},
     }
     return Ok(None);

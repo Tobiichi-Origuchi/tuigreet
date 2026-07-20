@@ -327,8 +327,8 @@ with both the selected path and opened target checked.
 The system and explicit configuration files are monitored and valid changes are
 applied automatically. Command-line options retain the highest priority. An
 unreadable or malformed update is rejected, preserving the last valid runtime
-configuration. Changes to *general.debug*, *general.log-file*, and *general.mock*
-require a restart.
+configuration. Changes to *general.debug*, *general.log-file*, *general.numlock*,
+and *general.mock* require a restart.
 
 # INPUT EDITING
 

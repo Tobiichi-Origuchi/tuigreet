@@ -14,7 +14,7 @@ use zeroize::Zeroize;
 use crate::{
   battery::BatteryInfo,
   cache::{CacheLoad, CacheState, CacheStore, RememberedSelection},
-  config::{self, Diagnostic, Settings},
+  config::{self, DEFAULT_XSESSION_WRAPPER, Diagnostic, GreetAlign, Settings},
   event::DEFAULT_REFRESH_RATE,
   info::{get_hostname, get_issue, get_sessions, get_users, session_paths},
   ipc::AuthState,
@@ -33,9 +33,6 @@ use crate::{
   },
 };
 
-// `startx` wants an absolute path to the executable as a first argument.
-// We don't want to resolve the session command in the greeter though, so it should be additionally wrapped with a known noop command (like `/usr/bin/env`).
-const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
 static HOSTNAME: LazyLock<String> = LazyLock::new(get_hostname);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -296,15 +293,6 @@ impl SecretDisplay {
   }
 }
 
-// This enum models text alignment options
-#[derive(Default, Debug, Clone)]
-pub enum GreetAlign {
-  #[default]
-  Center,
-  Left,
-  Right,
-}
-
 pub struct Greeter {
   pub debug: bool,
   pub logfile: String,
@@ -537,6 +525,22 @@ pub(crate) struct ReloadApplied {
   pub cancel_authentication: bool,
 }
 
+async fn blocking_discovery<T, F>(name: &str, discover: F) -> T
+where
+  T: Default + Send + 'static,
+  F: FnOnce() -> T + Send + 'static,
+{
+  match tokio::task::spawn_blocking(discover).await {
+    Ok(value) => value,
+    Err(error) => {
+      let warning = format!("{name} discovery worker failed: {error}");
+      eprintln!("tuigreet: warning: {warning}");
+      tracing::warn!("{warning}");
+      T::default()
+    },
+  }
+}
+
 impl ReloadPlan {
   pub(crate) fn prepare(snapshot: ReloadSnapshot, mut settings: Settings) -> Self {
     let mut warnings = Vec::new();
@@ -578,7 +582,7 @@ impl ReloadPlan {
       settings.sessions != snapshot.settings.sessions || settings.xsessions != snapshot.settings.xsessions;
     let sessions = session_paths_changed.then(|| {
       let paths = session_paths(&settings.sessions, &settings.xsessions);
-      let mut sessions = get_sessions(&paths).unwrap_or_default();
+      let mut sessions = get_sessions(&paths);
       if settings.mock && sessions.is_empty() {
         sessions = mock_sessions();
       }
@@ -646,9 +650,7 @@ impl Greeter {
     };
 
     let paths = greeter.session_paths.clone();
-    let mut sessions = tokio::task::spawn_blocking(move || get_sessions(&paths).unwrap_or_default())
-      .await
-      .unwrap_or_default();
+    let mut sessions = blocking_discovery("session", move || get_sessions(&paths)).await;
 
     if greeter.mock && sessions.is_empty() {
       sessions = mock_sessions();
@@ -814,7 +816,7 @@ impl Greeter {
   }
 
   // Reset the software to its initial state.
-  pub async fn reset(&mut self, soft: bool) {
+  pub fn reset(&mut self, soft: bool) {
     self.reset_local(soft);
   }
 
@@ -905,11 +907,7 @@ impl Greeter {
   }
 
   pub fn greet_align(&self) -> GreetAlign {
-    match self.settings.greet_align.as_str() {
-      "left" => GreetAlign::Left,
-      "right" => GreetAlign::Right,
-      _ => GreetAlign::Center,
-    }
+    self.settings.greet_align
   }
 
   pub(crate) fn refresh_render_cache(&mut self) {
@@ -1190,12 +1188,11 @@ impl Greeter {
 
     if self.user_menu || self.user_autocomplete {
       let (min_uid, max_uid) = settings.effective_uid_range();
-      let users = tokio::task::spawn_blocking(move || {
+      let users = blocking_discovery("user", move || {
         tracing::info!("min/max UIDs are {}/{}", min_uid, max_uid);
         get_users(min_uid, max_uid)
       })
-      .await
-      .unwrap_or_default();
+      .await;
 
       self.users = Menu {
         title: text!(self, title_users),
@@ -1221,7 +1218,7 @@ impl Greeter {
     self.session_wrapper = settings.session_wrapper.clone();
     self.xsession_wrapper = settings.xsession_wrapper.clone();
     let greeting = if settings.issue {
-      tokio::task::spawn_blocking(get_issue).await.unwrap_or_default()
+      blocking_discovery("issue", get_issue).await
     } else {
       settings.greeting.clone()
     };
@@ -1944,6 +1941,7 @@ mod test {
     CliInvocation,
     DiscoveredSessions,
     ReloadPlan,
+    blocking_discovery,
     build_power_options_with_default,
     mock_sessions,
     parse_options_ignoring_invalid,
@@ -1963,6 +1961,12 @@ mod test {
       users::User,
     },
   };
+
+  #[tokio::test]
+  async fn panicking_startup_discovery_fails_open() {
+    let discovered: Vec<String> = blocking_discovery("test", || panic!("discovery panic")).await;
+    assert!(discovered.is_empty());
+  }
 
   fn reload_plan(settings: crate::config::Settings) -> ReloadPlan {
     ReloadPlan {

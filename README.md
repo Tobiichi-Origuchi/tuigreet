@@ -159,6 +159,8 @@ The original project remains available from Arch Linux's official repositories a
 
 All three install `/usr/bin/tuigreet` and `/etc/tuigreet/config.toml`, provide `greetd-greeter`, and conflict with `greetd-tuigreet` and each other. Package upgrades preserve administrator changes to the configuration file.
 
+The `-git` package intentionally keeps stable AUR metadata while `pkgver()` resolves the current upstream commit at build time. Enable development-package checks in your AUR helper so upstream-only commits are discovered during upgrades. For example, paru users can set `Devel` in `paru.conf` or run `paru --devel -Syu`; `paru --gendb` initializes tracking when migrating an existing VCS package from another helper.
+
 ### Pre-built binaries
 
 Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each archive is a staged root filesystem containing `usr/bin/tuigreet`, the man page, project documentation, license and copyright notices, tmpfiles configuration, and `etc/tuigreet/config.toml`. It is not an installer and should not be unpacked blindly over `/`, because doing so could overwrite an existing login-manager configuration.

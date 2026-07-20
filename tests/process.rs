@@ -336,6 +336,40 @@ async fn create_session_disconnect_reconnects_and_retries_safely() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_create_session_disconnects_fail_and_restore_terminal() {
+  let temp = TempDir::new().expect("failed to create process-test directory");
+  let config = temp.path().join("config.toml");
+  write_config(&config, real_config("PROCESS-RECONNECT-FAILURE"));
+  let socket = temp.path().join("greetd.sock");
+  let listener = UnixListener::bind(&socket).expect("failed to bind greetd test socket");
+  let server = tokio::spawn(serve_repeated_create_disconnects(listener));
+
+  let mut process = PtyProcess::spawn(
+    [
+      "--config",
+      config.to_str().expect("non-UTF-8 test path"),
+      "--cmd",
+      "unreachable-session",
+      "--no-xsession-wrapper",
+    ],
+    &[("GREETD_SOCK", socket.as_os_str())],
+  );
+  process.wait_for_output("Username:");
+  process.assert_terminal_active();
+  process.send(b"alice\r");
+
+  let status = process.wait();
+  assert_eq!(status.code(), Some(1), "output:\n{}", process.output_text());
+  process.assert_terminal_restored();
+
+  tokio::time::timeout(PROCESS_TIMEOUT, server)
+    .await
+    .expect("greetd reconnect-failure server timed out")
+    .expect("greetd reconnect-failure server panicked")
+    .expect("greetd reconnect-failure server failed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn start_session_disconnect_is_not_replayed_and_restores_terminal() {
   let temp = TempDir::new().expect("failed to create process-test directory");
   let config = temp.path().join("config.toml");
@@ -543,6 +577,25 @@ async fn serve_authentication_after_create_disconnect(listener: UnixListener) ->
 
   let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
   authenticate_and_start(&mut stream).await
+}
+
+async fn serve_repeated_create_disconnects(listener: UnixListener) -> Result<(), String> {
+  for attempt in 0..3 {
+    let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
+    match Request::read_from(&mut stream)
+      .await
+      .map_err(|error| error.to_string())?
+    {
+      Request::CreateSession { username } if username == "alice" => {},
+      request => {
+        return Err(format!(
+          "attempt {} expected CreateSession for alice, received {request:?}",
+          attempt + 1
+        ));
+      },
+    }
+  }
+  Ok(())
 }
 
 async fn serve_start_disconnect(listener: UnixListener) -> Result<IpcExchange, String> {

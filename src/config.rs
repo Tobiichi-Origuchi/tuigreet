@@ -1815,6 +1815,79 @@ mod tests {
   }
 
   #[test]
+  fn every_combined_boolean_layer_transition_uses_the_highest_explicit_value() {
+    #[derive(Clone, Copy)]
+    enum Value {
+      Omitted,
+      False,
+      True,
+    }
+
+    impl Value {
+      fn file(self) -> &'static str {
+        match self {
+          Self::Omitted => "",
+          Self::False => "[display]\ntime = false\n",
+          Self::True => "[display]\ntime = true\n",
+        }
+      }
+
+      fn resolved(self) -> Option<bool> {
+        match self {
+          Self::Omitted => None,
+          Self::False => Some(false),
+          Self::True => Some(true),
+        }
+      }
+    }
+
+    let directory = tempdir().unwrap();
+    let system = directory.path().join("system.toml");
+    let explicit = directory.path().join("explicit.toml");
+    let values = [Value::Omitted, Value::False, Value::True];
+
+    for system_value in values {
+      for explicit_value in values {
+        for cli_value in values {
+          write(&system, system_value.file());
+          write(&explicit, explicit_value.file());
+          let cli: &[&str] = match cli_value {
+            Value::Omitted => &[],
+            Value::False => &["--no-time"],
+            Value::True => &["--time"],
+          };
+
+          let (settings, warnings) = load_paths(Some(&system), Some(&explicit), &matches(cli));
+          assert!(warnings.is_empty(), "{warnings:?}");
+          let expected = cli_value
+            .resolved()
+            .or_else(|| explicit_value.resolved())
+            .or_else(|| system_value.resolved())
+            .unwrap_or(false);
+          assert_eq!(settings.time, expected);
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn optional_value_clears_survive_combined_file_layers_until_cli_replaces_them() {
+    let directory = tempdir().unwrap();
+    let system = directory.path().join("system.toml");
+    let explicit = directory.path().join("explicit.toml");
+    write(&system, "[display]\ngreeting = 'lower'\n");
+    write(&explicit, "[display]\ngreeting = ''\n");
+
+    let (cleared, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(cleared.greeting.is_none());
+
+    let (replaced, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&["--greeting", "upper"]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(replaced.greeting.as_deref(), Some("upper"));
+  }
+
+  #[test]
   fn layers_every_field_without_losing_false_or_zero() {
     let dir = tempdir().unwrap();
     let system = dir.path().join("system.toml");

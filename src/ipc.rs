@@ -911,7 +911,10 @@ mod test {
   use greetd_ipc::{AuthMessageType, ErrorType, Request, Response, codec::TokioCodec};
   use nix::fcntl::{Flock, FlockArg};
   use tempfile::tempdir;
-  use tokio::sync::{RwLock, mpsc as tokio_mpsc};
+  use tokio::{
+    io::AsyncWriteExt,
+    sync::{RwLock, mpsc as tokio_mpsc},
+  };
 
   use super::{
     AuthInput,
@@ -1176,6 +1179,46 @@ mod test {
   }
 
   #[tokio::test]
+  async fn automatic_info_and_error_messages_form_one_ordered_exchange() {
+    let mut greeter = Greeter::default();
+    greeter.auth_state = AuthState::CreatingSession;
+    greeter.session_source = SessionSource::DefaultCommand("session".into(), None);
+    let ipc = Ipc::new();
+
+    for (kind, message) in [
+      (AuthMessageType::Info, "Insert your security key"),
+      (AuthMessageType::Error, "The key was not detected"),
+      (AuthMessageType::Info, "Touch the key to continue"),
+    ] {
+      ipc
+        .parse_response(&mut greeter, Response::AuthMessage {
+          auth_message_type: kind,
+          auth_message: message.into(),
+        })
+        .await
+        .unwrap();
+      assert_eq!(greeter.auth_state, AuthState::ContinuingAuth);
+      assert!(matches!(
+        ipc.next().await.unwrap().as_ref(),
+        Request::PostAuthMessageResponse { response: None }
+      ));
+    }
+
+    assert_eq!(greeter.mode, Mode::Action);
+    assert_eq!(
+      greeter.message.as_deref(),
+      Some("The key was not detected\nTouch the key to continue")
+    );
+
+    ipc.parse_response(&mut greeter, Response::Success).await.unwrap();
+    assert!(matches!(greeter.auth_state, AuthState::StartingSession(..)));
+    assert!(matches!(
+      ipc.next().await.unwrap().as_ref(),
+      Request::StartSession { cmd, .. } if cmd.as_slice() == ["session"]
+    ));
+  }
+
+  #[tokio::test]
   async fn greetd_errors_obey_the_automatic_cancel_contract() {
     let mut greeter = Greeter::default();
     greeter.username.value = "alice".into();
@@ -1268,6 +1311,122 @@ mod test {
 
     assert!(matches!(result, Err(TransactionFailure::TimedOut)));
     assert!(stream.is_none());
+  }
+
+  #[tokio::test]
+  async fn write_failure_closes_the_transport_before_recovery() {
+    let (client, server) = tokio::net::UnixStream::pair().unwrap();
+    drop(server);
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    let ipc = Ipc::new();
+    let mut stream = Some(client);
+
+    let result = ipc
+      .transact(
+        &greeter,
+        &mut stream,
+        &Request::CreateSession {
+          username: "alice".into(),
+        },
+        0,
+        Duration::from_secs(1),
+      )
+      .await;
+
+    assert!(matches!(result, Err(TransactionFailure::Transport(_))));
+    assert!(stream.is_none());
+  }
+
+  #[tokio::test]
+  async fn malformed_response_closes_the_transport_before_recovery() {
+    let (client, mut server) = tokio::net::UnixStream::pair().unwrap();
+    let server = tokio::spawn(async move {
+      assert!(matches!(
+        Request::read_from(&mut server).await.unwrap(),
+        Request::CreateSession { .. }
+      ));
+      server.write_all(&1_u32.to_ne_bytes()).await.unwrap();
+      server.write_all(b"{").await.unwrap();
+      server.shutdown().await.unwrap();
+    });
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    let ipc = Ipc::new();
+    let mut stream = Some(client);
+
+    let result = ipc
+      .transact(
+        &greeter,
+        &mut stream,
+        &Request::CreateSession {
+          username: "alice".into(),
+        },
+        0,
+        Duration::from_secs(1),
+      )
+      .await;
+
+    server.await.unwrap();
+    assert!(matches!(result, Err(TransactionFailure::Transport(_))));
+    assert!(stream.is_none());
+  }
+
+  #[tokio::test]
+  async fn delayed_start_session_ignores_modal_keys_and_commits_its_snapshot() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let pending = PendingSession {
+      username: "submitted-user".into(),
+      display_name: Some("Submitted User".into()),
+      selection: CachedSession::Command("submitted-session".into()),
+    };
+    let policy = CachePolicy {
+      remember_username: true,
+      remember_session: true,
+      remember_user_session: false,
+      allow_command_editor: true,
+    };
+    let mut state = Greeter::default();
+    state.mode = Mode::Processing;
+    state.previous_mode = Mode::Password;
+    state.allow_command_editor = true;
+    state.session_source = SessionSource::Command("submitted-session".into());
+    state.command_buffer = "submitted-session".into();
+    state.auth_state = AuthState::StartingSession(pending.clone(), policy);
+    let greeter = Arc::new(RwLock::new(state));
+    let ipc = Ipc::new();
+
+    for code in [
+      KeyCode::F(2),
+      KeyCode::F(3),
+      KeyCode::F(12),
+      KeyCode::Esc,
+      KeyCode::Enter,
+      KeyCode::Char('x'),
+    ] {
+      crate::keyboard::handle(greeter.clone(), KeyEvent::new(code, KeyModifiers::NONE), ipc.clone())
+        .await
+        .unwrap();
+    }
+
+    let mut greeter = greeter.write().await;
+    assert_eq!(greeter.mode, Mode::Processing);
+    assert!(matches!(
+      &greeter.session_source,
+      SessionSource::Command(command) if command == "submitted-session"
+    ));
+    assert_eq!(greeter.command_buffer, "submitted-session");
+
+    let mut committed = None;
+    ipc
+      .parse_response_with(&mut greeter, Response::Success, |pending, policy| {
+        committed = Some((pending, policy));
+      })
+      .await
+      .unwrap();
+    let (committed_pending, committed_policy) = committed.expect("start snapshot was not committed");
+    assert_eq!(committed_pending, pending);
+    assert_eq!(committed_policy, policy);
+    assert_eq!(greeter.auth_state, AuthState::Started);
   }
 
   #[tokio::test]

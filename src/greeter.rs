@@ -2514,6 +2514,30 @@ mod test {
     );
   }
 
+  #[tokio::test]
+  async fn mock_startup_uses_fallback_sessions_when_discovery_is_empty() {
+    let directory = tempdir().unwrap();
+    let sessions = directory.path().join("wayland");
+    let xsessions = directory.path().join("x11");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::create_dir_all(&xsessions).unwrap();
+    let invocation = CliInvocation::parse([
+      "tuigreet",
+      "--mock",
+      "--sessions",
+      sessions.to_str().unwrap(),
+      "--xsessions",
+      xsessions.to_str().unwrap(),
+    ]);
+
+    let greeter = Greeter::new_isolated(invocation.matches()).await;
+
+    assert!(greeter.mock);
+    assert_eq!(greeter.sessions.options.len(), 3);
+    assert_eq!(greeter.sessions.options[0].slug.as_deref(), Some("mock-wayland"));
+    assert!(matches!(greeter.session_source, SessionSource::Session(0)));
+  }
+
   #[test]
   fn sole_menu_user_is_preselected() {
     let mut greeter = Greeter::default();

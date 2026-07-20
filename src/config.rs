@@ -19,6 +19,9 @@ use crate::{
 pub const SYSTEM_CONFIG: &str = "/etc/tuigreet/config.toml";
 pub const DEFAULT_IPC_TIMEOUT: u16 = 120;
 pub const MAX_IPC_TIMEOUT: u16 = 3600;
+const LOGIN_DEFS: &str = "/etc/login.defs";
+const DEFAULT_MIN_UID: u32 = 1000;
+const DEFAULT_MAX_UID: u32 = 60000;
 const DEFAULT_LOG_FILE: &str = "/tmp/tuigreet.log";
 const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
 
@@ -47,6 +50,7 @@ pub struct Settings {
   pub user_autocomplete: bool,
   pub min_uid: Option<u32>,
   pub max_uid: Option<u32>,
+  pub(crate) uid_defaults: (u32, u32),
   pub theme: ThemeSettings,
   pub asterisks: bool,
   pub asterisks_chars: String,
@@ -91,6 +95,7 @@ impl Default for Settings {
       user_autocomplete: false,
       min_uid: None,
       max_uid: None,
+      uid_defaults: (DEFAULT_MIN_UID, DEFAULT_MAX_UID),
       theme: ThemeSettings::default(),
       asterisks: false,
       asterisks_chars: "*".into(),
@@ -108,6 +113,15 @@ impl Default for Settings {
       kb_sessions: 3,
       kb_power: 12,
     }
+  }
+}
+
+impl Settings {
+  pub(crate) fn effective_uid_range(&self) -> (u32, u32) {
+    (
+      self.min_uid.unwrap_or(self.uid_defaults.0),
+      self.max_uid.unwrap_or(self.uid_defaults.1),
+    )
   }
 }
 
@@ -183,7 +197,19 @@ fn reload_paths(
   explicit: Option<&Path>,
   matches: &Matches,
 ) -> Result<(Settings, Vec<String>), Vec<String>> {
-  let mut settings = Settings::default();
+  reload_paths_with_uid_defaults(system, explicit, matches, read_uid_defaults(Path::new(LOGIN_DEFS)))
+}
+
+fn reload_paths_with_uid_defaults(
+  system: &Path,
+  explicit: Option<&Path>,
+  matches: &Matches,
+  uid_defaults: (u32, u32),
+) -> Result<(Settings, Vec<String>), Vec<String>> {
+  let mut settings = Settings {
+    uid_defaults,
+    ..Settings::default()
+  };
   let mut warnings = Vec::new();
 
   if !load_optional_strict(system, &mut settings, &mut warnings) {
@@ -243,7 +269,19 @@ pub fn check(matches: &Matches) -> bool {
 }
 
 fn load_paths(system: Option<&Path>, explicit: Option<&Path>, matches: &Matches) -> (Settings, Vec<String>) {
-  let mut settings = Settings::default();
+  load_paths_with_uid_defaults(system, explicit, matches, read_uid_defaults(Path::new(LOGIN_DEFS)))
+}
+
+fn load_paths_with_uid_defaults(
+  system: Option<&Path>,
+  explicit: Option<&Path>,
+  matches: &Matches,
+  uid_defaults: (u32, u32),
+) -> (Settings, Vec<String>) {
+  let mut settings = Settings {
+    uid_defaults,
+    ..Settings::default()
+  };
   let mut warnings = Vec::new();
 
   if let Some(path) = system {
@@ -260,6 +298,38 @@ fn load_paths(system: Option<&Path>, explicit: Option<&Path>, matches: &Matches)
     &mut warnings,
   );
   (settings, warnings)
+}
+
+fn read_uid_defaults(path: &Path) -> (u32, u32) {
+  let fallback = (DEFAULT_MIN_UID, DEFAULT_MAX_UID);
+  let Ok(source) = fs::read_to_string(path) else {
+    return fallback;
+  };
+
+  let mut parsed = (None, None);
+  for line in source.lines() {
+    let mut fields = line.split_whitespace();
+    match (fields.next(), fields.next()) {
+      (Some("UID_MIN"), Some(value)) => {
+        if let Ok(value) = value.parse() {
+          parsed.0 = Some(value);
+        }
+      },
+      (Some("UID_MAX"), Some(value)) => {
+        if let Ok(value) = value.parse() {
+          parsed.1 = Some(value);
+        }
+      },
+      _ => {},
+    }
+  }
+
+  let candidate = (parsed.0.unwrap_or(fallback.0), parsed.1.unwrap_or(fallback.1));
+  if candidate.0 <= candidate.1 {
+    candidate
+  } else {
+    fallback
+  }
 }
 
 fn load_optional(path: &Path, settings: &mut Settings, warnings: &mut Vec<String>) {
@@ -397,9 +467,11 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
 
   let proposed_min = layer.min_uid.unwrap_or(settings.min_uid);
   let proposed_max = layer.max_uid.unwrap_or(settings.max_uid);
-  if matches!((proposed_min, proposed_max), (Some(min), Some(max)) if min > max) {
+  let effective_min = proposed_min.unwrap_or(settings.uid_defaults.0);
+  let effective_max = proposed_max.unwrap_or(settings.uid_defaults.1);
+  if effective_min > effective_max {
     warnings.push(format!(
-      "{source}: users.min-uid exceeds users.max-uid; ignoring both fields from this layer"
+      "{source}: users.min-uid exceeds users.max-uid after applying this layer ({effective_min} > {effective_max}); ignoring UID fields from this layer"
     ));
   } else {
     settings.min_uid = proposed_min;
@@ -1175,7 +1247,7 @@ mod tests {
   use ratatui::style::Color;
   use tempfile::tempdir;
 
-  use super::{ThemeColor, load_paths, reload_paths};
+  use super::{ThemeColor, load_paths, load_paths_with_uid_defaults, read_uid_defaults, reload_paths};
   use crate::{
     Greeter,
     power::PowerCommand,
@@ -1444,6 +1516,89 @@ mod tests {
     assert!(settings.remember_user_session);
     assert!(warnings.iter().any(|warning| warning.contains("min-uid exceeds")));
     assert!(warnings.iter().any(|warning| warning.contains("duplicate keybinding")));
+  }
+
+  #[test]
+  fn login_defs_uses_valid_bounds_and_falls_back_as_a_pair() {
+    let dir = tempdir().unwrap();
+    let login_defs = dir.path().join("login.defs");
+
+    assert_eq!(read_uid_defaults(&login_defs), (1000, 60000));
+
+    write(
+      &login_defs,
+      "# system accounts\nUID_MIN 500\nUID_MAX 65000\nUID_MIN invalid\n",
+    );
+    assert_eq!(read_uid_defaults(&login_defs), (500, 65000));
+
+    write(&login_defs, "UID_MIN 70000\nUID_MAX 60000\n");
+    assert_eq!(read_uid_defaults(&login_defs), (1000, 60000));
+
+    write(&login_defs, "UID_MAX 999\n");
+    assert_eq!(read_uid_defaults(&login_defs), (1000, 60000));
+  }
+
+  #[test]
+  fn one_sided_uid_layers_are_validated_against_effective_defaults() {
+    let dir = tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+
+    write(&config, "[users]\nmin-uid = 70000\n");
+    let (invalid_min, warnings) = load_paths_with_uid_defaults(Some(&config), None, &matches(&[]), (1000, 60000));
+    assert_eq!((invalid_min.min_uid, invalid_min.max_uid), (None, None));
+    assert_eq!(invalid_min.effective_uid_range(), (1000, 60000));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("min-uid exceeds users.max-uid"));
+    assert!(warnings[0].contains("70000 > 60000"));
+
+    write(&config, "[users]\nmax-uid = 999\n");
+    let (invalid_max, warnings) = load_paths_with_uid_defaults(Some(&config), None, &matches(&[]), (1000, 60000));
+    assert_eq!((invalid_max.min_uid, invalid_max.max_uid), (None, None));
+    assert_eq!(invalid_max.effective_uid_range(), (1000, 60000));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+
+    write(&config, "[users]\nmin-uid = 2000\n");
+    let (valid_min, warnings) = load_paths_with_uid_defaults(Some(&config), None, &matches(&[]), (1000, 60000));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(valid_min.effective_uid_range(), (2000, 60000));
+
+    write(&config, "[users]\nmax-uid = 50000\n");
+    let (valid_max, warnings) = load_paths_with_uid_defaults(Some(&config), None, &matches(&[]), (1000, 60000));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(valid_max.effective_uid_range(), (1000, 50000));
+  }
+
+  #[test]
+  fn invalid_higher_uid_layer_preserves_the_lower_pair() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    let explicit = dir.path().join("explicit.toml");
+    write(&system, "[users]\nmin-uid = 2000\nmax-uid = 50000\n");
+
+    write(&explicit, "[users]\nmin-uid = 60000\n");
+    let (invalid_min, warnings) =
+      load_paths_with_uid_defaults(Some(&system), Some(&explicit), &matches(&[]), (1000, 60000));
+    assert_eq!((invalid_min.min_uid, invalid_min.max_uid), (Some(2000), Some(50000)));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+
+    write(&explicit, "[users]\nmax-uid = 1000\n");
+    let (invalid_max, warnings) =
+      load_paths_with_uid_defaults(Some(&system), Some(&explicit), &matches(&[]), (1000, 60000));
+    assert_eq!((invalid_max.min_uid, invalid_max.max_uid), (Some(2000), Some(50000)));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+  }
+
+  #[test]
+  fn one_configuration_revision_keeps_its_resolved_uid_defaults() {
+    let dir = tempdir().unwrap();
+    let login_defs = dir.path().join("login.defs");
+    write(&login_defs, "UID_MIN 1500\nUID_MAX 55000\n");
+
+    let (settings, warnings) = load_paths_with_uid_defaults(None, None, &matches(&[]), read_uid_defaults(&login_defs));
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    write(&login_defs, "UID_MIN 3000\nUID_MAX 40000\n");
+    assert_eq!(settings.effective_uid_range(), (1500, 55000));
   }
 
   #[test]

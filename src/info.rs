@@ -4,8 +4,8 @@ use std::{
   env,
   error::Error,
   ffi::{OsStr, OsString},
-  fs::{self, File},
-  io::{self, BufRead, BufReader},
+  fs,
+  io,
   os::{fd::AsRawFd, unix::fs::PermissionsExt},
   path::{Path, PathBuf},
   sync::LazyLock,
@@ -26,9 +26,6 @@ use crate::{
     users::User,
   },
 };
-
-const DEFAULT_MIN_UID: u32 = 1000;
-const DEFAULT_MAX_UID: u32 = 60000;
 
 static XDG_DATA_DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
   let value = env::var("XDG_DATA_DIRS").unwrap_or("/usr/local/share:/usr/share".to_string());
@@ -155,38 +152,6 @@ where
       .then_with(|| left.name.cmp(&right.name))
   });
   users
-}
-
-pub fn get_min_max_uids(min_uid: Option<u32>, max_uid: Option<u32>) -> (u32, u32) {
-  if let (Some(min_uid), Some(max_uid)) = (min_uid, max_uid) {
-    return (min_uid, max_uid);
-  }
-
-  let overrides = (min_uid, max_uid);
-  let default = (min_uid.unwrap_or(DEFAULT_MIN_UID), max_uid.unwrap_or(DEFAULT_MAX_UID));
-
-  match File::open("/etc/login.defs") {
-    Err(_) => default,
-    Ok(file) => {
-      let file = BufReader::new(file);
-
-      let uids: (u32, u32) = file.lines().fold(default, |acc, line| {
-        line
-          .map(|line| {
-            let mut tokens = line.split_whitespace();
-
-            match (overrides, tokens.next(), tokens.next()) {
-              ((None, _), Some("UID_MIN"), Some(value)) => (value.parse::<u32>().unwrap_or(acc.0), acc.1),
-              ((_, None), Some("UID_MAX"), Some(value)) => (acc.0, value.parse::<u32>().unwrap_or(acc.1)),
-              _ => acc,
-            }
-          })
-          .unwrap_or(acc)
-      });
-
-      uids
-    },
-  }
 }
 
 pub fn session_paths(sessions: &[String], xsessions: &[String]) -> Vec<(PathBuf, SessionType)> {

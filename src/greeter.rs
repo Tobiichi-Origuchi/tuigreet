@@ -15,7 +15,7 @@ use crate::{
   cache::{CacheLoad, CacheState, CacheStore, RememberedSelection},
   config::{self, Settings},
   event::DEFAULT_REFRESH_RATE,
-  info::{get_issue, get_min_max_uids, get_sessions, get_users, session_paths},
+  info::{get_issue, get_sessions, get_users, session_paths},
   ipc::AuthState,
   power::{CommandLine, PowerOption},
   text::Text,
@@ -536,11 +536,10 @@ impl ReloadPlan {
 
     let users_changed = settings.user_menu != snapshot.settings.user_menu
       || settings.user_autocomplete != snapshot.settings.user_autocomplete
-      || settings.min_uid != snapshot.settings.min_uid
-      || settings.max_uid != snapshot.settings.max_uid;
+      || settings.effective_uid_range() != snapshot.settings.effective_uid_range();
     let users = users_changed.then(|| {
       if settings.user_menu || settings.user_autocomplete {
-        let (min_uid, max_uid) = get_min_max_uids(settings.min_uid, settings.max_uid);
+        let (min_uid, max_uid) = settings.effective_uid_range();
         tracing::info!("min/max UIDs are {}/{}", min_uid, max_uid);
         get_users(min_uid, max_uid)
       } else {
@@ -1077,10 +1076,8 @@ impl Greeter {
     self.user_autocomplete = settings.user_autocomplete;
 
     if self.user_menu || self.user_autocomplete {
-      let min_uid = settings.min_uid;
-      let max_uid = settings.max_uid;
+      let (min_uid, max_uid) = settings.effective_uid_range();
       let users = tokio::task::spawn_blocking(move || {
-        let (min_uid, max_uid) = get_min_max_uids(min_uid, max_uid);
         tracing::info!("min/max UIDs are {}/{}", min_uid, max_uid);
         get_users(min_uid, max_uid)
       })

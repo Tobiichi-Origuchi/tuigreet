@@ -12,6 +12,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use zeroize::Zeroize;
 
 use crate::{
+  battery::BatteryInfo,
   cache::{CacheLoad, CacheState, CacheStore, RememberedSelection},
   config::{self, Diagnostic, Settings},
   event::DEFAULT_REFRESH_RATE,
@@ -376,6 +377,7 @@ pub struct Greeter {
   pub time: bool,
   // Time format
   pub time_format: Option<String>,
+  pub(crate) battery_info: Option<BatteryInfo>,
   pub refresh_rate: u16,
   // Greeting message (MOTD) to use to welcome the user.
   pub greeting: Option<String>,
@@ -444,6 +446,7 @@ impl Default for Greeter {
       theme: Theme::default(),
       time: false,
       time_format: None,
+      battery_info: None,
       refresh_rate: DEFAULT_REFRESH_RATE,
       greeting: None,
       message: None,
@@ -969,9 +972,23 @@ impl Greeter {
     opts.optflag("", "no-time", "do not display the current date and time");
     opts.optopt(
       "",
+      "time-position",
+      "place the time at top, bottom, or hide it",
+      "POSITION",
+    );
+    opts.optopt(
+      "",
       "time-format",
       "custom strftime format for displaying date and time",
       "FORMAT",
+    );
+    opts.optflag("b", "battery", "display the sampled battery percentage");
+    opts.optflag("", "no-battery", "hide the battery percentage");
+    opts.optopt(
+      "",
+      "battery-position",
+      "place battery status on the left or right",
+      "SIDE",
     );
     opts.optopt(
       "",
@@ -1044,6 +1061,27 @@ impl Greeter {
       "alignment of the greeting text in the main prompt container (default: 'center')",
       "[left|center|right]",
     );
+
+    opts.optopt(
+      "",
+      "status-position",
+      "place the status bar at top, bottom, or hide it",
+      "POSITION",
+    );
+    opts.optflag("", "status-reset", "show the reset status item");
+    opts.optflag("", "no-status-reset", "hide the reset status item");
+    opts.optflag("", "status-command", "show the command status item");
+    opts.optflag("", "no-status-command", "hide the command status item");
+    opts.optflag("", "status-sessions", "show the sessions status item");
+    opts.optflag("", "no-status-sessions", "hide the sessions status item");
+    opts.optflag("", "status-power", "show the power status item");
+    opts.optflag("", "no-status-power", "hide the power status item");
+    opts.optflag("", "status-selection", "show the selected command or session");
+    opts.optflag("", "no-status-selection", "hide the selected command or session");
+    opts.optflag("", "status-caps-lock", "show the active Caps Lock indicator");
+    opts.optflag("", "no-status-caps-lock", "hide the Caps Lock indicator");
+    opts.optflag("", "status-config", "show configuration reload notices");
+    opts.optflag("", "no-status-config", "hide configuration reload notices");
 
     opts.optopt(
       "",

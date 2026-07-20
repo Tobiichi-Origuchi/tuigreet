@@ -15,7 +15,7 @@ use ratatui::{
   Frame as CrosstermFrame,
   Terminal,
   buffer::Buffer,
-  layout::{Alignment, Constraint, Direction, Layout},
+  layout::{Alignment, Constraint, Direction, Layout, Rect},
   style::Modifier,
   text::{Line, Span},
   widgets::Paragraph,
@@ -25,11 +25,13 @@ use tokio::sync::RwLock;
 use util::{buttonize, inset};
 
 use self::common::style::{Theme, Themed};
-use crate::{Greeter, Mode, info::capslock_status, ui::util::should_hide_cursor};
-
-const TITLEBAR_INDEX: usize = 0;
-const MAIN_INDEX: usize = 1;
-const STATUSBAR_INDEX: usize = 2;
+use crate::{
+  Greeter,
+  Mode,
+  config::{HorizontalPosition, WidgetPosition},
+  info::capslock_status,
+  ui::util::should_hide_cursor,
+};
 
 pub(super) type Frame<'a> = CrosstermFrame<'a>;
 
@@ -63,97 +65,56 @@ where
 
     let size = f.area();
     let padded = inset(size, greeter.window_padding());
-    let chunks = Layout::default()
-      .constraints(
-        [
-          Constraint::Length(1), // Date and time
-          Constraint::Min(0),    // Main area
-          Constraint::Length(1), // Status line
-        ]
-        .as_ref(),
-      )
-      .split(padded);
+    let time_top = greeter.time && greeter.settings.time_position == WidgetPosition::Top;
+    let time_bottom = greeter.time && greeter.settings.time_position == WidgetPosition::Bottom;
+    let info_top = time_top || greeter.settings.battery;
+    let status_top = greeter.settings.status_position == WidgetPosition::Top;
+    let status_bottom = greeter.settings.status_position == WidgetPosition::Bottom;
+    let mut constraints = Vec::with_capacity(5);
+    let mut info_slot = None;
+    let mut status_slot = None;
+    let mut time_bottom_slot = None;
 
-    if greeter.time {
-      let time_text = Span::from(get_time(&greeter));
-      let time = Paragraph::new(time_text)
+    if info_top {
+      info_slot = Some(constraints.len());
+      constraints.push(Constraint::Length(1));
+    }
+    if status_top {
+      status_slot = Some(constraints.len());
+      constraints.push(Constraint::Length(1));
+    }
+    let main_slot = constraints.len();
+    constraints.push(Constraint::Min(0));
+    if status_bottom {
+      status_slot = Some(constraints.len());
+      constraints.push(Constraint::Length(1));
+    }
+    if time_bottom {
+      time_bottom_slot = Some(constraints.len());
+      constraints.push(Constraint::Length(1));
+    }
+    let chunks = Layout::default().constraints(constraints).split(padded);
+
+    if let Some(slot) = info_slot {
+      render_info_row(&greeter, &mut f, chunks[slot], time_top);
+    }
+    if let Some(slot) = time_bottom_slot {
+      let time = Paragraph::new(Span::from(get_time(&greeter)))
         .alignment(Alignment::Center)
         .style(theme.of(&[Themed::Time]));
-
-      f.render_widget(time, chunks[TITLEBAR_INDEX]);
+      f.render_widget(time, chunks[slot]);
     }
-
-    let status_area = chunks[STATUSBAR_INDEX];
-    let status_block_size_right = u16::try_from(input::width(&text!(greeter, status_caps)).saturating_add(1))
-      .unwrap_or(u16::MAX)
-      .min(status_area.width);
-
-    let status_chunks = Layout::default()
-      .direction(Direction::Horizontal)
-      .constraints([Constraint::Min(0), Constraint::Length(status_block_size_right)])
-      .split(status_area);
-
-    let session_source_label = match greeter.session_source {
-      SessionSource::Session(_) => text!(greeter, status_session),
-      _ => text!(greeter, status_command),
-    };
-
-    let session_source = greeter.session_source.label(&greeter).unwrap_or("-");
-
-    let mut status_left_spans = vec![
-      status_label(theme, "ESC"),
-      status_value(&greeter, theme, Button::Other, text!(greeter, action_reset)),
-      Span::from(" "),
-    ];
-    if greeter.allow_command_editor {
-      status_left_spans.extend([
-        status_label(theme, format!("F{}", greeter.kb_command)),
-        status_value(&greeter, theme, Button::Command, text!(greeter, action_command)),
-        Span::from(" "),
-      ]);
-    }
-    status_left_spans.extend([
-      status_label(theme, format!("F{}", greeter.kb_sessions)),
-      status_value(&greeter, theme, Button::Session, text!(greeter, action_session)),
-      Span::from(" "),
-    ]);
-    if !greeter.powers.options.is_empty() {
-      status_left_spans.extend([
-        status_label(theme, format!("F{}", greeter.kb_power)),
-        status_value(&greeter, theme, Button::Power, text!(greeter, action_power)),
-        Span::from(" "),
-      ]);
-    }
-    status_left_spans.extend([
-      status_label(theme, session_source_label),
-      status_value(&greeter, theme, Button::Other, session_source),
-    ]);
-    if let Some(notice) = &greeter.config_notice {
-      status_left_spans.extend([
-        Span::from(" "),
-        status_label(theme, "CONFIG"),
-        status_value(&greeter, theme, Button::Other, notice),
-      ]);
-    }
-    let status_left_text = Line::from(status_left_spans);
-    let status_left = Paragraph::new(status_left_text);
-
-    f.render_widget(status_left, status_chunks[0]);
-
-    if capslock {
-      let status_right_text = status_label(theme, text!(greeter, status_caps));
-      let status_right = Paragraph::new(status_right_text).alignment(Alignment::Right);
-
-      f.render_widget(status_right, status_chunks[1]);
+    if let Some(slot) = status_slot {
+      render_status(&greeter, &mut f, chunks[slot], capslock);
     }
 
     let cursor = match greeter.mode {
-      Mode::Command => self::command::draw(&greeter, &mut f, chunks[MAIN_INDEX]),
-      Mode::Sessions => greeter.sessions.draw(&greeter, &mut f, chunks[MAIN_INDEX]),
-      Mode::Power => greeter.powers.draw(&greeter, &mut f, chunks[MAIN_INDEX]),
-      Mode::Users => greeter.users.draw(&greeter, &mut f, chunks[MAIN_INDEX]),
-      Mode::Processing => self::processing::draw(&greeter, &mut f, chunks[MAIN_INDEX]),
-      _ => self::prompt::draw(&greeter, &mut f, chunks[MAIN_INDEX]),
+      Mode::Command => self::command::draw(&greeter, &mut f, chunks[main_slot]),
+      Mode::Sessions => greeter.sessions.draw(&greeter, &mut f, chunks[main_slot]),
+      Mode::Power => greeter.powers.draw(&greeter, &mut f, chunks[main_slot]),
+      Mode::Users => greeter.users.draw(&greeter, &mut f, chunks[main_slot]),
+      Mode::Processing => self::processing::draw(&greeter, &mut f, chunks[main_slot]),
+      _ => self::prompt::draw(&greeter, &mut f, chunks[main_slot]),
     };
 
     draw_cursor(f.buffer_mut(), cursor, cursor_on && !hide_cursor);
@@ -166,6 +127,179 @@ where
   terminal.apply_buffer()?;
 
   Ok(())
+}
+
+fn render_info_row(greeter: &Greeter, frame: &mut Frame<'_>, area: Rect, show_time: bool) {
+  let theme = &greeter.theme;
+  let time = show_time.then(|| get_time(greeter));
+  if let Some(time) = &time {
+    frame.render_widget(
+      Paragraph::new(Span::from(time.clone()))
+        .alignment(Alignment::Center)
+        .style(theme.of(&[Themed::Time])),
+      area,
+    );
+  }
+
+  let Some(battery) = greeter.battery_info else {
+    return;
+  };
+  let battery = if battery.charging {
+    format!("{}%+", battery.percentage)
+  } else {
+    format!("{}%", battery.percentage)
+  };
+  if !info_items_fit(area.width, time.as_deref(), &battery, greeter.settings.battery_position) {
+    return;
+  }
+  let alignment = match greeter.settings.battery_position {
+    HorizontalPosition::Left => Alignment::Left,
+    HorizontalPosition::Right => Alignment::Right,
+  };
+  frame.render_widget(
+    Paragraph::new(Span::from(battery))
+      .alignment(alignment)
+      .style(theme.of(&[Themed::Time])),
+    area,
+  );
+}
+
+fn info_items_fit(width: u16, time: Option<&str>, battery: &str, position: HorizontalPosition) -> bool {
+  let width = usize::from(width);
+  let battery_width = input::width(battery);
+  if battery_width > width {
+    return false;
+  }
+  let Some(time) = time else {
+    return true;
+  };
+  let time_width = input::width(time).min(width);
+  let time_start = width.saturating_sub(time_width) / 2;
+  let time_end = time_start.saturating_add(time_width);
+  match position {
+    HorizontalPosition::Left => battery_width.saturating_add(1) <= time_start,
+    HorizontalPosition::Right => width.saturating_sub(battery_width) >= time_end.saturating_add(1),
+  }
+}
+
+struct StatusEntry {
+  spans: Vec<Span<'static>>,
+  width: usize,
+  priority: u8,
+}
+
+fn status_entry(label: Span<'static>, value: Span<'static>, priority: u8) -> StatusEntry {
+  let width = input::width(label.content.as_ref()).saturating_add(input::width(value.content.as_ref()));
+  StatusEntry {
+    spans: vec![label, value],
+    width,
+    priority,
+  }
+}
+
+fn render_status(greeter: &Greeter, frame: &mut Frame<'_>, area: Rect, capslock: bool) {
+  let theme = &greeter.theme;
+  let caps = (capslock && greeter.settings.status_caps_lock).then(|| {
+    let label = text!(greeter, status_caps);
+    let width = input::width(&label);
+    (status_label(theme, label), width)
+  });
+  let caps = caps.filter(|(_, width)| *width <= usize::from(area.width));
+  let right_width = caps.as_ref().map_or(0, |(_, width)| *width);
+  let right_gap = usize::from(right_width != 0 && usize::from(area.width) > right_width);
+  let left_width = usize::from(area.width).saturating_sub(right_width.saturating_add(right_gap));
+
+  let mut entries = Vec::new();
+  if greeter.settings.status_reset {
+    entries.push(status_entry(
+      status_label(theme, "ESC"),
+      status_value(greeter, theme, Button::Other, text!(greeter, action_reset)),
+      0,
+    ));
+  }
+  if greeter.settings.status_command && greeter.allow_command_editor {
+    entries.push(status_entry(
+      status_label(theme, format!("F{}", greeter.kb_command)),
+      status_value(greeter, theme, Button::Command, text!(greeter, action_command)),
+      3,
+    ));
+  }
+  if greeter.settings.status_sessions {
+    entries.push(status_entry(
+      status_label(theme, format!("F{}", greeter.kb_sessions)),
+      status_value(greeter, theme, Button::Session, text!(greeter, action_session)),
+      1,
+    ));
+  }
+  if greeter.settings.status_power && !greeter.powers.options.is_empty() {
+    entries.push(status_entry(
+      status_label(theme, format!("F{}", greeter.kb_power)),
+      status_value(greeter, theme, Button::Power, text!(greeter, action_power)),
+      2,
+    ));
+  }
+  if greeter.settings.status_selection {
+    let label = match greeter.session_source {
+      SessionSource::Session(_) => text!(greeter, status_session),
+      _ => text!(greeter, status_command),
+    };
+    entries.push(status_entry(
+      status_label(theme, label),
+      status_value(
+        greeter,
+        theme,
+        Button::Other,
+        greeter.session_source.label(greeter).unwrap_or("-"),
+      ),
+      4,
+    ));
+  }
+  if greeter.settings.status_config
+    && let Some(notice) = &greeter.config_notice
+  {
+    entries.push(status_entry(
+      status_label(theme, "CONFIG"),
+      status_value(greeter, theme, Button::Other, notice),
+      5,
+    ));
+  }
+
+  let selected = select_status_entries(&entries, left_width);
+  let mut spans = Vec::new();
+  for (index, entry) in entries.into_iter().enumerate() {
+    if !selected[index] {
+      continue;
+    }
+    if !spans.is_empty() {
+      spans.push(Span::from(" "));
+    }
+    spans.extend(entry.spans);
+  }
+
+  let right_width = u16::try_from(right_width).unwrap_or(area.width).min(area.width);
+  let chunks = Layout::default()
+    .direction(Direction::Horizontal)
+    .constraints([Constraint::Min(0), Constraint::Length(right_width)])
+    .split(area);
+  frame.render_widget(Paragraph::new(Line::from(spans)), chunks[0]);
+  if let Some((caps, _)) = caps {
+    frame.render_widget(Paragraph::new(caps).alignment(Alignment::Right), chunks[1]);
+  }
+}
+
+fn select_status_entries(entries: &[StatusEntry], available: usize) -> Vec<bool> {
+  let mut order = (0..entries.len()).collect::<Vec<_>>();
+  order.sort_by_key(|index| (entries[*index].priority, *index));
+  let mut selected = vec![false; entries.len()];
+  let mut used = 0_usize;
+  for index in order {
+    let required = entries[index].width.saturating_add(usize::from(used != 0));
+    if used.saturating_add(required) <= available {
+      selected[index] = true;
+      used = used.saturating_add(required);
+    }
+  }
+  selected
 }
 
 fn draw_cursor(buffer: &mut Buffer, cursor: Option<(u16, u16)>, visible: bool) {
@@ -248,7 +382,11 @@ mod tests {
   use tokio::sync::RwLock;
 
   use super::*;
-  use crate::ui::{power::Power, sessions::Session, users::User};
+  use crate::{
+    battery::BatteryInfo,
+    config::{HorizontalPosition, WidgetPosition},
+    ui::{power::Power, sessions::Session, users::User},
+  };
 
   struct LockCheckingBackend {
     inner: TestBackend,
@@ -521,7 +659,7 @@ mod tests {
     greeter.prompt = Some("Password:".into());
     greeter.asking_for_secret = true;
     greeter.message = Some("OLD-LINE-ONE\nOLD-LINE-TWO\nLATEST-LINE".into());
-    let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(24, 7)).unwrap();
 
     draw(Arc::new(RwLock::new(greeter)), &mut terminal, true).await.unwrap();
 
@@ -542,7 +680,7 @@ mod tests {
     greeter.command_buffer = "command".into();
     greeter.command_cursor = greeter.command_buffer.len();
     greeter.input_warning = Some("OLD-WARNING-ONE\nOLD-WARNING-TWO\nLATEST-WARNING".into());
-    let mut terminal = Terminal::new(TestBackend::new(24, 7)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(24, 6)).unwrap();
 
     draw(Arc::new(RwLock::new(greeter)), &mut terminal, true).await.unwrap();
 
@@ -598,5 +736,99 @@ mod tests {
       .collect::<String>();
     assert!(rendered.contains("PAM feedback remains visible"));
     assert!(rendered.contains("Reload warning summary"));
+  }
+
+  #[tokio::test]
+  async fn time_status_and_battery_positions_are_explicit_and_hideable() {
+    let mut greeter = Greeter::default();
+    greeter.time = true;
+    greeter.time_format = Some("CLOCK".into());
+    greeter.settings.time_position = WidgetPosition::Top;
+    greeter.settings.status_position = WidgetPosition::Top;
+    greeter.settings.battery = true;
+    greeter.settings.battery_position = HorizontalPosition::Right;
+    greeter.battery_info = Some(BatteryInfo {
+      percentage: 73,
+      charging: true,
+    });
+    let greeter = Arc::new(RwLock::new(greeter));
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+
+    draw(greeter.clone(), &mut terminal, false).await.unwrap();
+    let buffer = terminal.backend().buffer();
+    assert_eq!(row_containing(buffer, "CLOCK"), Some(0));
+    assert_eq!(row_containing(buffer, "73%+"), Some(0));
+    assert_eq!(row_containing(buffer, "Reset"), Some(1));
+
+    {
+      let mut state = greeter.write().await;
+      state.settings.time_position = WidgetPosition::Bottom;
+      state.settings.status_position = WidgetPosition::Bottom;
+      state.settings.battery = false;
+      state.battery_info = None;
+    }
+    draw(greeter.clone(), &mut terminal, false).await.unwrap();
+    let buffer = terminal.backend().buffer();
+    assert_eq!(row_containing(buffer, "Reset"), Some(10));
+    assert_eq!(row_containing(buffer, "CLOCK"), Some(11));
+    assert!(row_containing(buffer, "73%+").is_none());
+
+    {
+      let mut state = greeter.write().await;
+      state.settings.time_position = WidgetPosition::Hidden;
+      state.settings.status_position = WidgetPosition::Hidden;
+    }
+    draw(greeter, &mut terminal, false).await.unwrap();
+    let buffer = terminal.backend().buffer();
+    assert!(row_containing(buffer, "CLOCK").is_none());
+    assert!(row_containing(buffer, "Reset").is_none());
+  }
+
+  #[tokio::test]
+  async fn status_item_visibility_is_independent() {
+    let mut greeter = Greeter::default();
+    greeter.settings.status_reset = false;
+    greeter.settings.status_command = false;
+    greeter.settings.status_power = false;
+    greeter.settings.status_selection = false;
+    greeter.settings.status_caps_lock = false;
+    greeter.settings.status_config = false;
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+
+    draw(Arc::new(RwLock::new(greeter)), &mut terminal, false)
+      .await
+      .unwrap();
+
+    let rendered = terminal
+      .backend()
+      .buffer()
+      .content
+      .iter()
+      .map(Cell::symbol)
+      .collect::<String>();
+    assert!(rendered.contains("Choose session"));
+    assert!(!rendered.contains("Reset"));
+    assert!(!rendered.contains("Command"));
+  }
+
+  #[test]
+  fn narrow_status_selection_keeps_atomic_items_by_priority() {
+    let entry = |width, priority| StatusEntry {
+      spans: Vec::new(),
+      width,
+      priority,
+    };
+    let entries = vec![entry(7, 0), entry(8, 3), entry(6, 1), entry(4, 5)];
+
+    assert_eq!(select_status_entries(&entries, 14), [true, false, true, false]);
+    assert_eq!(select_status_entries(&entries, 6), [false, false, true, false]);
+    assert_eq!(select_status_entries(&entries, 3), [false, false, false, false]);
+  }
+
+  #[test]
+  fn battery_is_hidden_instead_of_overlapping_centered_time() {
+    assert!(info_items_fit(20, Some("TIME"), "50%", HorizontalPosition::Left));
+    assert!(!info_items_fit(10, Some("LONGTIME"), "50%", HorizontalPosition::Left));
+    assert!(!info_items_fit(2, None, "50%", HorizontalPosition::Right));
   }
 }

@@ -52,8 +52,14 @@
 # greeting = "Welcome"
 # Show the current date and time.
 # time = false
+# Time row placement: "top", "bottom", or "hidden".
+# time-position = "top"
 # strftime format used when time is enabled (example).
 # time-format = "%Y-%m-%d %H:%M"
+# Show battery percentage from Linux power-supply sysfs. Sampled every 30 seconds.
+# battery = false
+# Battery placement within the top information row: "left" or "right".
+# battery-position = "left"
 # Screen refresh rate in frames per second; valid range: 1..=240.
 # refresh-rate = 2
 # Legacy semicolon-separated theme overlay (example); prefer the [theme] table.
@@ -108,6 +114,18 @@
 # prompt-padding = 1
 # Greeting alignment: "left", "center", or "right".
 # greet-align = "center"
+
+[status]
+# Status bar placement: "top", "bottom", or "hidden".
+# position = "bottom"
+# Each item below is responsive: enabled items that do not fit are omitted whole.
+# reset = true
+# command = true
+# sessions = true
+# power = true
+# selection = true
+# caps-lock = true
+# config = true
 
 [power]
 # Commands available before authentication. Treat custom values as privileged.

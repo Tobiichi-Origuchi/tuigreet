@@ -35,6 +35,7 @@ const CONFIG_SECTIONS: &[&str] = &[
   "users",
   "secret",
   "layout",
+  "status",
   "power",
   "keybindings",
   "theme",
@@ -55,7 +56,10 @@ const DISPLAY_FIELDS: &[&str] = &[
   "issue",
   "greeting",
   "time",
+  "time-position",
   "time-format",
+  "battery",
+  "battery-position",
   "refresh-rate",
   "theme",
 ];
@@ -63,6 +67,16 @@ const REMEMBER_FIELDS: &[&str] = &["username", "session", "user-session"];
 const USER_FIELDS: &[&str] = &["default", "menu", "autocomplete", "min-uid", "max-uid"];
 const SECRET_FIELDS: &[&str] = &["asterisks", "characters"];
 const LAYOUT_FIELDS: &[&str] = &["window-padding", "container-padding", "prompt-padding", "greet-align"];
+const STATUS_FIELDS: &[&str] = &[
+  "position",
+  "reset",
+  "command",
+  "sessions",
+  "power",
+  "selection",
+  "caps-lock",
+  "config",
+];
 const POWER_FIELDS: &[&str] = &["shutdown", "reboot", "suspend", "hibernate", "setsid"];
 const KEYBINDING_FIELDS: &[&str] = &["command", "sessions", "power"];
 const THEME_FIELDS: &[&str] = &[
@@ -86,6 +100,7 @@ const CONFIG_SCHEMA: &[(&str, &[&str])] = &[
   ("users", USER_FIELDS),
   ("secret", SECRET_FIELDS),
   ("layout", LAYOUT_FIELDS),
+  ("status", STATUS_FIELDS),
   ("power", POWER_FIELDS),
   ("keybindings", KEYBINDING_FIELDS),
   ("theme", THEME_FIELDS),
@@ -274,6 +289,19 @@ impl Default for ContainerTitle {
   }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WidgetPosition {
+  Top,
+  Bottom,
+  Hidden,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HorizontalPosition {
+  Left,
+  Right,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Settings {
   pub debug: bool,
@@ -293,7 +321,10 @@ pub struct Settings {
   pub issue: bool,
   pub greeting: Option<String>,
   pub time: bool,
+  pub time_position: WidgetPosition,
   pub time_format: Option<String>,
+  pub battery: bool,
+  pub battery_position: HorizontalPosition,
   pub refresh_rate: u16,
   pub remember: bool,
   pub remember_session: bool,
@@ -311,6 +342,14 @@ pub struct Settings {
   pub container_padding: u16,
   pub prompt_padding: u16,
   pub greet_align: String,
+  pub status_position: WidgetPosition,
+  pub status_reset: bool,
+  pub status_command: bool,
+  pub status_sessions: bool,
+  pub status_power: bool,
+  pub status_selection: bool,
+  pub status_caps_lock: bool,
+  pub status_config: bool,
   pub power_shutdown: PowerCommand,
   pub power_reboot: PowerCommand,
   pub power_suspend: PowerCommand,
@@ -342,7 +381,10 @@ impl Default for Settings {
       issue: false,
       greeting: None,
       time: false,
+      time_position: WidgetPosition::Top,
       time_format: None,
+      battery: false,
+      battery_position: HorizontalPosition::Left,
       refresh_rate: DEFAULT_REFRESH_RATE,
       remember: false,
       remember_session: false,
@@ -360,6 +402,14 @@ impl Default for Settings {
       container_padding: 1,
       prompt_padding: 1,
       greet_align: "center".into(),
+      status_position: WidgetPosition::Bottom,
+      status_reset: true,
+      status_command: true,
+      status_sessions: true,
+      status_power: true,
+      status_selection: true,
+      status_caps_lock: true,
+      status_config: true,
       power_shutdown: PowerCommand::Auto,
       power_reboot: PowerCommand::Auto,
       power_suspend: PowerCommand::Auto,
@@ -402,7 +452,10 @@ struct Layer {
   issue: Option<bool>,
   greeting: Option<Option<String>>,
   time: Option<bool>,
+  time_position: Option<WidgetPosition>,
   time_format: Option<Option<String>>,
+  battery: Option<bool>,
+  battery_position: Option<HorizontalPosition>,
   refresh_rate: Option<u16>,
   remember: Option<bool>,
   remember_session: Option<bool>,
@@ -419,6 +472,14 @@ struct Layer {
   container_padding: Option<u16>,
   prompt_padding: Option<u16>,
   greet_align: Option<String>,
+  status_position: Option<WidgetPosition>,
+  status_reset: Option<bool>,
+  status_command: Option<bool>,
+  status_sessions: Option<bool>,
+  status_power: Option<bool>,
+  status_selection: Option<bool>,
+  status_caps_lock: Option<bool>,
+  status_config: Option<bool>,
   power_shutdown: Option<PowerCommand>,
   power_reboot: Option<PowerCommand>,
   power_suspend: Option<PowerCommand>,
@@ -808,7 +869,10 @@ fn apply_layer(settings: &mut Settings, layer: Layer, context: LayerContext<'_>,
     width,
     container_title,
     time,
+    time_position,
     time_format,
+    battery,
+    battery_position,
     refresh_rate,
     remember,
     default_user,
@@ -820,6 +884,14 @@ fn apply_layer(settings: &mut Settings, layer: Layer, context: LayerContext<'_>,
     container_padding,
     prompt_padding,
     greet_align,
+    status_position,
+    status_reset,
+    status_command,
+    status_sessions,
+    status_power,
+    status_selection,
+    status_caps_lock,
+    status_config,
     power_shutdown,
     power_reboot,
     power_suspend,
@@ -951,9 +1023,12 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
   layer.issue = cli_bool(matches, "issue", "no-issue", warnings);
   layer.greeting = string("greeting").map(Some);
   layer.time = cli_bool(matches, "time", "no-time", warnings);
+  layer.time_position = cli_widget_position(matches, "time-position", warnings);
   layer.time_format = string("time-format").and_then(|value| {
     valid_time_format(&value, LayerContext::CommandLine, None, "--time-format", warnings).then_some(Some(value))
   });
+  layer.battery = cli_bool(matches, "battery", "no-battery", warnings);
+  layer.battery_position = cli_horizontal_position(matches, "battery-position", warnings);
   layer.refresh_rate = cli_number(matches, "refresh-rate", 1, MAX_REFRESH_RATE, warnings);
   layer.remember = cli_bool(matches, "remember", "no-remember", warnings);
   layer.remember_session = cli_bool(matches, "remember-session", "no-remember-session", warnings);
@@ -990,6 +1065,14 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
       ));
     }
   }
+  layer.status_position = cli_widget_position(matches, "status-position", warnings);
+  layer.status_reset = cli_bool(matches, "status-reset", "no-status-reset", warnings);
+  layer.status_command = cli_bool(matches, "status-command", "no-status-command", warnings);
+  layer.status_sessions = cli_bool(matches, "status-sessions", "no-status-sessions", warnings);
+  layer.status_power = cli_bool(matches, "status-power", "no-status-power", warnings);
+  layer.status_selection = cli_bool(matches, "status-selection", "no-status-selection", warnings);
+  layer.status_caps_lock = cli_bool(matches, "status-caps-lock", "no-status-caps-lock", warnings);
+  layer.status_config = cli_bool(matches, "status-config", "no-status-config", warnings);
   layer.power_shutdown = cli_power_command(matches, "power-shutdown", warnings);
   layer.power_reboot = cli_power_command(matches, "power-reboot", warnings);
   layer.power_suspend = cli_power_command(matches, "power-suspend", warnings);
@@ -1108,6 +1191,96 @@ where
   }
 }
 
+fn cli_widget_position(matches: &Matches, name: &str, warnings: &mut Vec<Diagnostic>) -> Option<WidgetPosition> {
+  let value = matches.opt_str(name)?;
+  match value.as_str() {
+    "top" => Some(WidgetPosition::Top),
+    "bottom" => Some(WidgetPosition::Bottom),
+    "hidden" => Some(WidgetPosition::Hidden),
+    _ => {
+      warnings.push(Diagnostic::command_line(
+        Some(&format!("--{name}")),
+        format!("invalid value '{value}'; expected top, bottom, or hidden"),
+      ));
+      None
+    },
+  }
+}
+
+fn cli_horizontal_position(
+  matches: &Matches,
+  name: &str,
+  warnings: &mut Vec<Diagnostic>,
+) -> Option<HorizontalPosition> {
+  let value = matches.opt_str(name)?;
+  match value.as_str() {
+    "left" => Some(HorizontalPosition::Left),
+    "right" => Some(HorizontalPosition::Right),
+    _ => {
+      warnings.push(Diagnostic::command_line(
+        Some(&format!("--{name}")),
+        format!("invalid value '{value}'; expected left or right"),
+      ));
+      None
+    },
+  }
+}
+
+fn read_widget_position(
+  table: &Table,
+  field: &str,
+  path: &Path,
+  source: &str,
+  warnings: &mut Vec<Diagnostic>,
+  section: &str,
+) -> Option<WidgetPosition> {
+  let value = read_string(table, field, path, source, warnings, section)?;
+  match value.as_str() {
+    "top" => Some(WidgetPosition::Top),
+    "bottom" => Some(WidgetPosition::Bottom),
+    "hidden" => Some(WidgetPosition::Hidden),
+    _ => {
+      let message = format!("{section}.{field} must be top, bottom, or hidden; ignoring it");
+      warn_field_item(
+        table.get(field),
+        path,
+        source,
+        warnings,
+        &format!("{section}.{field}"),
+        &message,
+      );
+      None
+    },
+  }
+}
+
+fn read_horizontal_position(
+  table: &Table,
+  field: &str,
+  path: &Path,
+  source: &str,
+  warnings: &mut Vec<Diagnostic>,
+  section: &str,
+) -> Option<HorizontalPosition> {
+  let value = read_string(table, field, path, source, warnings, section)?;
+  match value.as_str() {
+    "left" => Some(HorizontalPosition::Left),
+    "right" => Some(HorizontalPosition::Right),
+    _ => {
+      let message = format!("{section}.{field} must be left or right; ignoring it");
+      warn_field_item(
+        table.get(field),
+        path,
+        source,
+        warnings,
+        &format!("{section}.{field}"),
+        &message,
+      );
+      None
+    },
+  }
+}
+
 fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: &mut Vec<Diagnostic>) -> Layer {
   warn_unknown(document.as_table(), CONFIG_SECTIONS, path, source, warnings, "");
   let mut layer = Layer::default();
@@ -1154,6 +1327,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     layer.issue = read_bool(table, "issue", path, source, warnings, "display");
     layer.greeting = read_optional_string(table, "greeting", path, source, warnings, "display");
     layer.time = read_bool(table, "time", path, source, warnings, "display");
+    layer.time_position = read_widget_position(table, "time-position", path, source, warnings, "display");
     layer.time_format =
       read_optional_string(table, "time-format", path, source, warnings, "display").and_then(|value| {
         value.map_or(Some(None), |format| {
@@ -1167,6 +1341,8 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
           .then_some(Some(format))
         })
       });
+    layer.battery = read_bool(table, "battery", path, source, warnings, "display");
+    layer.battery_position = read_horizontal_position(table, "battery-position", path, source, warnings, "display");
     layer.refresh_rate = read_u16(
       table,
       "refresh-rate",
@@ -1247,6 +1423,17 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
         );
       }
     }
+  }
+  if let Some(table) = read_table(document.as_table(), "status", path, source, warnings) {
+    warn_unknown(table, STATUS_FIELDS, path, source, warnings, "status");
+    layer.status_position = read_widget_position(table, "position", path, source, warnings, "status");
+    layer.status_reset = read_bool(table, "reset", path, source, warnings, "status");
+    layer.status_command = read_bool(table, "command", path, source, warnings, "status");
+    layer.status_sessions = read_bool(table, "sessions", path, source, warnings, "status");
+    layer.status_power = read_bool(table, "power", path, source, warnings, "status");
+    layer.status_selection = read_bool(table, "selection", path, source, warnings, "status");
+    layer.status_caps_lock = read_bool(table, "caps-lock", path, source, warnings, "status");
+    layer.status_config = read_bool(table, "config", path, source, warnings, "status");
   }
   if let Some(table) = read_table(document.as_table(), "power", path, source, warnings) {
     warn_unknown(table, POWER_FIELDS, path, source, warnings, "power");
@@ -1873,10 +2060,11 @@ mod tests {
     write(
       &enabled,
       "[general]\ndebug = true\nquiet = true\nnumlock = true\nmock = true\n\
-       [display]\nissue = true\ntime = true\n\
+       [display]\nissue = true\ntime = true\nbattery = true\n\
        [remember]\nusername = true\nsession = true\n\
        [users]\nmenu = true\nautocomplete = true\n\
        [secret]\nasterisks = true\n\
+       [status]\nreset = true\ncommand = true\nsessions = true\npower = true\nselection = true\ncaps-lock = true\nconfig = true\n\
        [power]\nsetsid = false\n",
     );
     let (disabled, warnings) = load_paths(
@@ -1889,11 +2077,19 @@ mod tests {
         "--no-mock",
         "--no-issue",
         "--no-time",
+        "--no-battery",
         "--no-remember",
         "--no-remember-session",
         "--no-user-menu",
         "--no-user-autocomplete",
         "--no-asterisks",
+        "--no-status-reset",
+        "--no-status-command",
+        "--no-status-sessions",
+        "--no-status-power",
+        "--no-status-selection",
+        "--no-status-caps-lock",
+        "--no-status-config",
         "--power-setsid",
       ]),
     );
@@ -1904,11 +2100,19 @@ mod tests {
     assert!(!disabled.mock);
     assert!(!disabled.issue);
     assert!(!disabled.time);
+    assert!(!disabled.battery);
     assert!(!disabled.remember);
     assert!(!disabled.remember_session);
     assert!(!disabled.user_menu);
     assert!(!disabled.user_autocomplete);
     assert!(!disabled.asterisks);
+    assert!(!disabled.status_reset);
+    assert!(!disabled.status_command);
+    assert!(!disabled.status_sessions);
+    assert!(!disabled.status_power);
+    assert!(!disabled.status_selection);
+    assert!(!disabled.status_caps_lock);
+    assert!(!disabled.status_config);
     assert!(disabled.power_setsid);
 
     let user_session = dir.path().join("user-session.toml");
@@ -1926,7 +2130,8 @@ mod tests {
     write(
       &disabled_file,
       "[general]\ndebug = false\nquiet = false\nnumlock = false\nmock = false\n\
-       [display]\nissue = false\ntime = false\n\
+       [display]\nissue = false\ntime = false\nbattery = false\n\
+       [status]\nreset = false\ncommand = false\nsessions = false\npower = false\nselection = false\ncaps-lock = false\nconfig = false\n\
        [power]\nsetsid = true\n",
     );
     let (enabled, warnings) = load_paths(
@@ -1939,6 +2144,14 @@ mod tests {
         "--mock",
         "--issue",
         "--time",
+        "--battery",
+        "--status-reset",
+        "--status-command",
+        "--status-sessions",
+        "--status-power",
+        "--status-selection",
+        "--status-caps-lock",
+        "--status-config",
         "--power-no-setsid",
       ]),
     );
@@ -1949,6 +2162,14 @@ mod tests {
     assert!(enabled.mock);
     assert!(enabled.issue);
     assert!(enabled.time);
+    assert!(enabled.battery);
+    assert!(enabled.status_reset);
+    assert!(enabled.status_command);
+    assert!(enabled.status_sessions);
+    assert!(enabled.status_power);
+    assert!(enabled.status_selection);
+    assert!(enabled.status_caps_lock);
+    assert!(enabled.status_config);
     assert!(!enabled.power_setsid);
   }
 
@@ -1960,6 +2181,44 @@ mod tests {
     assert!(!settings.mock);
     assert_eq!(warnings.len(), 2);
     assert!(warnings.iter().all(|warning| warning.contains("takes precedence")));
+  }
+
+  #[test]
+  fn widget_positions_are_validated_and_cli_has_final_precedence() {
+    let directory = tempdir().unwrap();
+    let valid = directory.path().join("valid.toml");
+    write(
+      &valid,
+      "[display]\ntime-position = 'bottom'\nbattery-position = 'right'\n[status]\nposition = 'top'\n",
+    );
+    let (settings, warnings) = load_paths(
+      Some(&valid),
+      None,
+      &matches(&[
+        "--time-position",
+        "hidden",
+        "--battery-position",
+        "left",
+        "--status-position",
+        "bottom",
+      ]),
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(settings.time_position, super::WidgetPosition::Hidden);
+    assert_eq!(settings.battery_position, super::HorizontalPosition::Left);
+    assert_eq!(settings.status_position, super::WidgetPosition::Bottom);
+
+    let invalid = directory.path().join("invalid.toml");
+    write(
+      &invalid,
+      "[display]\ntime-position = 'middle'\nbattery-position = 'center'\n[status]\nposition = 'side'\n",
+    );
+    let (settings, warnings) = load_paths(Some(&invalid), None, &matches(&[]));
+    assert_eq!(settings.time_position, super::WidgetPosition::Top);
+    assert_eq!(settings.battery_position, super::HorizontalPosition::Left);
+    assert_eq!(settings.status_position, super::WidgetPosition::Bottom);
+    assert_eq!(warnings.len(), 3);
+    assert!(warnings.iter().all(|warning| warning.contains("ignoring it")));
   }
 
   #[test]
@@ -2707,7 +2966,10 @@ mod tests {
       issue: false,
       greeting: Some("Welcome".into()),
       time: false,
+      time_position: super::WidgetPosition::Top,
       time_format: Some("%Y-%m-%d %H:%M".into()),
+      battery: false,
+      battery_position: super::HorizontalPosition::Left,
       refresh_rate: 2,
       remember: false,
       remember_session: false,
@@ -2736,6 +2998,14 @@ mod tests {
       container_padding: 1,
       prompt_padding: 1,
       greet_align: "center".into(),
+      status_position: super::WidgetPosition::Bottom,
+      status_reset: true,
+      status_command: true,
+      status_sessions: true,
+      status_power: true,
+      status_selection: true,
+      status_caps_lock: true,
+      status_config: true,
       power_shutdown: command(&["shutdown", "-h", "now"]),
       power_reboot: command(&["shutdown", "-r", "now"]),
       power_suspend: command(&["systemctl", "suspend"]),

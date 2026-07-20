@@ -1,6 +1,7 @@
 #[macro_use]
 mod macros;
 
+mod battery;
 mod cache;
 mod config;
 mod desktop_entry;
@@ -33,6 +34,7 @@ use tokio::{
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
 use crate::{
+  battery::BatteryMonitor,
   config::Diagnostic,
   terminal::{TerminalSession, TerminationSignals},
   watcher::{ConfigWatcher, WatchOutcome},
@@ -109,9 +111,11 @@ where
   let initial_username = (!greeter.username.value.is_empty())
     .then(|| greeter.begin_authentication())
     .flatten();
+  let battery_enabled = greeter.settings.battery;
   let greeter = Arc::new(RwLock::new(greeter));
   let mut reloads = reload::ReloadCoordinator::new()?;
   let mut power_supervisor = power::PowerSupervisor::new();
+  let mut battery_monitor = BatteryMonitor::spawn(battery_enabled, greeter.clone(), events.sender());
   let mut power_return_state = None;
 
   // Register signal listeners before changing terminal modes, then let the
@@ -218,7 +222,9 @@ where
                 count => Some(format!("Configuration reloaded with {count} warnings")),
               };
               let cache_action = applied.cache_action;
+              let battery_enabled = greeter_state.settings.battery;
               drop(greeter_state);
+              battery_monitor.set_enabled(battery_enabled);
               report_reload_diagnostics("warning", &warnings);
               if let Some(action) = cache_action {
                 let cache_report = execute_cache_reload(&greeter, action).await;
@@ -327,6 +333,7 @@ where
   .await;
 
   watcher.shutdown().await;
+  battery_monitor.shutdown().await;
   power_supervisor.shutdown().await;
   ipc.shutdown();
   if !ipc_actor_finished && let Err(error) = ipc_actor.await {

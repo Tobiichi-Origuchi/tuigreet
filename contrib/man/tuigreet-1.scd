@@ -125,9 +125,23 @@ tuigreet - A graphical console greeter for greetd
 *--no-time*
 	Do not display the current date and time, overriding the configuration file.
 
+*--time-position POSITION*
+	Place the time at *top* or *bottom*, or set it to *hidden*.
+
 *--time-format FORMAT*
 	Configure a custom strftime-compliant format string for the current date
 	and time.
+
+*-b, --battery*
+	Display battery percentage, sampled from Linux power-supply sysfs every 30
+	seconds without filesystem access in the drawing path. A trailing + indicates
+	that at least one battery is charging.
+
+*--no-battery*
+	Hide battery status, overriding the configuration file.
+
+*--battery-position SIDE*
+	Place battery status at the *left* or *right* of the top information row.
 
 *--refresh-rate FPS*
 	Set the periodic screen refresh rate. The value must be between 1 and 240;
@@ -215,6 +229,16 @@ tuigreet - A graphical console greeter for greetd
 *--greet-align [left|center|right]*
 	Alignment of the greeting text in the main prompt container
 	(default: 'center').
+
+*--status-position POSITION*
+	Place the status bar at *top* or *bottom*, or set it to *hidden*.
+
+*--[no-]status-reset*, *--[no-]status-command*, *--[no-]status-sessions*,
+*--[no-]status-power*, *--[no-]status-selection*, *--[no-]status-caps-lock*,
+*--[no-]status-config*
+	Show or hide individual status items. Enabled items are kept atomic and are
+	omitted by deterministic priority when the terminal is too narrow; text is
+	never partially rendered merely to fill the status row.
 
 *--power-shutdown 'CMD [ARGS]...'*
 	Customize the command run when instructed to shut down the machine. This must

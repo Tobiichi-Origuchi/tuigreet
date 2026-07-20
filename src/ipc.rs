@@ -10,7 +10,7 @@ use std::{
   time::Duration,
 };
 
-use greetd_ipc::{AuthMessageType, ErrorType, Request, Response, codec::TokioCodec};
+use greetd_ipc::{AuthMessageType, ErrorType, Request, Response};
 use tokio::{
   net::UnixStream,
   sync::{
@@ -21,6 +21,7 @@ use tokio::{
   },
   time::{Instant, sleep, sleep_until, timeout},
 };
+use zeroize::Zeroizing;
 
 use crate::{
   AuthStatus,
@@ -28,6 +29,7 @@ use crate::{
   Mode,
   cache::{CacheStore, CacheUpdate, RememberedSelection, RememberedUser},
   event::{Control, Event},
+  ipc_codec::{SensitiveRequest, read_response, write_request},
   macros::SafeDebug,
   ui::sessions::{Session, SessionSource, SessionType},
 };
@@ -161,7 +163,7 @@ struct ResponseOutcome {
 pub struct Ipc(Arc<IpcHandle>);
 
 struct QueuedRequest {
-  request: Request,
+  request: SensitiveRequest,
   generation: u64,
 }
 
@@ -198,7 +200,10 @@ impl Ipc {
 
   pub async fn send(&self, request: Request) {
     tracing::info!("sending request to greetd: {}", request.safe_repr());
+    self.queue_request(SensitiveRequest::new(request)).await;
+  }
 
+  async fn queue_request(&self, request: SensitiveRequest) {
     let generation = self.0.cancel_generation.load(Ordering::Acquire);
     let _ = self.0.tx.send(QueuedRequest { request, generation }).await;
   }
@@ -208,7 +213,7 @@ impl Ipc {
   }
 
   #[cfg(test)]
-  pub async fn next(&self) -> Option<Request> {
+  pub(crate) async fn next(&self) -> Option<SensitiveRequest> {
     self.next_queued().await.map(|queued| queued.request)
   }
 
@@ -220,7 +225,13 @@ impl Ipc {
     let mut stream = None;
     let ipc_timeout = Duration::from_secs(u64::from(greeter.read().await.ipc_timeout));
     let response = self
-      .transact(&greeter, &mut stream, &queued.request, queued.generation, ipc_timeout)
+      .transact(
+        &greeter,
+        &mut stream,
+        queued.request.as_ref(),
+        queued.generation,
+        ipc_timeout,
+      )
       .await
       .map_err(transaction_error)?;
     let (outcome, cache_store) = {
@@ -270,7 +281,13 @@ impl Ipc {
 
       let ipc_timeout = Duration::from_secs(u64::from(greeter.read().await.ipc_timeout));
       let transaction = self
-        .transact(&greeter, &mut stream, &queued.request, queued.generation, ipc_timeout)
+        .transact(
+          &greeter,
+          &mut stream,
+          queued.request.as_ref(),
+          queued.generation,
+          ipc_timeout,
+        )
         .await;
 
       match transaction {
@@ -309,7 +326,7 @@ impl Ipc {
                   &greeter,
                   &renders,
                   &controls,
-                  &queued.request,
+                  queued.request.as_ref(),
                   queued.generation,
                   failures,
                 )
@@ -338,7 +355,7 @@ impl Ipc {
               &greeter,
               &renders,
               &controls,
-              &queued.request,
+              queued.request.as_ref(),
               queued.generation,
               failures,
             )
@@ -349,6 +366,14 @@ impl Ipc {
         },
       }
     }
+
+    // Closing and draining the receiver ensures secrets still waiting behind
+    // an in-flight request are scrubbed before the actor reports that it has
+    // stopped. SensitiveRequest also covers aborts and every local early-drop
+    // path while a request is being handled.
+    let mut requests = self.0.rx.lock().await;
+    requests.close();
+    while requests.try_recv().is_ok() {}
   }
 
   async fn transact(
@@ -398,7 +423,7 @@ impl Ipc {
         _ = self.wait_for_shutdown() => Err(TransactionFailure::Shutdown),
         _ = self.wait_for_cancel(generation) => Err(TransactionFailure::Cancelled),
         _ = sleep_until(deadline) => Err(TransactionFailure::TimedOut),
-        result = request.write_to(socket) => result.map_err(|error| TransactionFailure::Transport(error.to_string())),
+        result = write_request(request, socket) => result.map_err(|error| TransactionFailure::Transport(error.to_string())),
       }
     };
     if let Err(error) = write_result {
@@ -413,7 +438,7 @@ impl Ipc {
         _ = self.wait_for_shutdown() => Err(TransactionFailure::Shutdown),
         _ = self.wait_for_cancel(generation) => Err(TransactionFailure::Cancelled),
         _ = sleep_until(deadline) => Err(TransactionFailure::TimedOut),
-        result = Response::read_from(socket) => result.map_err(|error| TransactionFailure::Transport(error.to_string())),
+        result = read_response(socket) => result.map_err(|error| TransactionFailure::Transport(error.to_string())),
       }
     };
 
@@ -421,7 +446,7 @@ impl Ipc {
       && !matches!(request, Request::StartSession { .. })
       && let Some(socket) = stream.as_mut()
     {
-      let _ = timeout(CANCEL_WRITE_TIMEOUT, Request::CancelSession.write_to(socket)).await;
+      let _ = timeout(CANCEL_WRITE_TIMEOUT, write_request(&Request::CancelSession, socket)).await;
     }
     if response.is_err() {
       *stream = None;
@@ -478,7 +503,7 @@ impl Ipc {
   async fn cancel_stream_if_live(&self, greeter: &Arc<RwLock<Greeter>>, stream: &mut Option<UnixStream>) {
     let can_cancel = greeter.read().await.auth_state.is_live_prestart();
     if can_cancel && let Some(socket) = stream.as_mut() {
-      let _ = timeout(CANCEL_WRITE_TIMEOUT, Request::CancelSession.write_to(socket)).await;
+      let _ = timeout(CANCEL_WRITE_TIMEOUT, write_request(&Request::CancelSession, socket)).await;
     }
     *stream = None;
   }
@@ -552,6 +577,7 @@ impl Ipc {
         auth_message_type,
         auth_message,
       } => {
+        let mut auth_message = Zeroizing::new(auth_message);
         if !matches!(
           greeter.auth_state,
           AuthState::CreatingSession | AuthState::ContinuingAuth
@@ -577,7 +603,7 @@ impl Ipc {
           },
 
           AuthMessageType::Error => {
-            greeter.message = Some(auth_message);
+            greeter.message = Some(std::mem::take(&mut *auth_message));
             greeter.auth_state = AuthState::ContinuingAuth;
 
             self.send(Request::PostAuthMessageResponse { response: None }).await;
@@ -648,7 +674,14 @@ impl Ipc {
         }
       },
 
-      Response::Error { error_type, .. } => {
+      Response::Error {
+        error_type,
+        description,
+      } => {
+        // PAM implementations have been observed to echo entered material in
+        // descriptions. Keep the ignored value under zeroizing ownership for
+        // every return path through this branch.
+        let _description = Zeroizing::new(description);
         // Do not display actual message from greetd, which may contain entered information, sometimes passwords.
         tracing::info!("received an error from greetd: {error_type:?}");
 
@@ -838,14 +871,14 @@ mod test {
     fs::{self, OpenOptions},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, mpsc},
     time::Duration,
   };
 
   use greetd_ipc::{AuthMessageType, ErrorType, Request, Response, codec::TokioCodec};
   use nix::fcntl::{Flock, FlockArg};
   use tempfile::tempdir;
-  use tokio::sync::RwLock;
+  use tokio::sync::{RwLock, mpsc as tokio_mpsc};
 
   use super::{
     AuthInput,
@@ -865,6 +898,7 @@ mod test {
     cache::{CacheStore, CacheUpdate, RememberedSelection, RememberedUser},
     event::{Control, Events, fill_event_queue},
     ipc::{DefaultCommand, desktop_names_to_xdg},
+    ipc_codec::SensitiveRequest,
     ui::{
       common::masked::MaskedString,
       sessions::{Session, SessionSource, SessionType},
@@ -889,6 +923,115 @@ mod test {
       Response::Success
     ));
     assert!(matches!(mock_response(&Request::CancelSession), Response::Success));
+  }
+
+  fn probed_secret(probe: impl FnOnce(bool) + Send + 'static) -> SensitiveRequest {
+    SensitiveRequest::with_drop_probe(
+      Request::PostAuthMessageResponse {
+        response: Some("queued password".into()),
+      },
+      move |request| {
+        probe(matches!(
+          request,
+          Request::PostAuthMessageResponse { response: Some(response) } if response.is_empty()
+        ));
+      },
+    )
+  }
+
+  #[tokio::test]
+  async fn dropping_the_queue_scrubs_pending_authentication_responses() {
+    let (probe, result) = mpsc::channel();
+    let ipc = Ipc::new();
+    ipc
+      .queue_request(probed_secret(move |scrubbed| probe.send(scrubbed).unwrap()))
+      .await;
+
+    drop(ipc);
+
+    assert!(result.recv().unwrap());
+  }
+
+  #[tokio::test]
+  async fn actor_shutdown_scrubs_pending_authentication_responses() {
+    let (probe, result) = mpsc::channel();
+    let ipc = Ipc::new();
+    ipc
+      .queue_request(probed_secret(move |scrubbed| probe.send(scrubbed).unwrap()))
+      .await;
+    ipc.shutdown();
+
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    let (controls, _control_rx) = tokio_mpsc::unbounded_channel();
+    let (renders, _render_rx) = tokio_mpsc::channel(1);
+    ipc.run(greeter, controls, renders).await;
+
+    assert!(result.recv().unwrap());
+  }
+
+  #[tokio::test]
+  async fn successful_requests_are_scrubbed_after_the_transaction() {
+    let (probe, result) = tokio::sync::oneshot::channel();
+    let ipc = Ipc::new();
+    ipc
+      .queue_request(probed_secret(move |scrubbed| probe.send(scrubbed).unwrap()))
+      .await;
+
+    let mut state = Greeter::default();
+    state.mock = true;
+    state.auth_state = AuthState::ContinuingAuth;
+    state.session_source = SessionSource::DefaultCommand("true".into(), None);
+    let greeter = Arc::new(RwLock::new(state));
+    let (controls, _control_rx) = tokio_mpsc::unbounded_channel();
+    let (renders, _render_rx) = tokio_mpsc::channel(1);
+    let actor = tokio::spawn({
+      let ipc = ipc.clone();
+      async move { ipc.run(greeter, controls, renders).await }
+    });
+
+    assert!(
+      tokio::time::timeout(Duration::from_secs(1), result)
+        .await
+        .unwrap()
+        .unwrap()
+    );
+    ipc.shutdown();
+    tokio::time::timeout(Duration::from_secs(1), actor)
+      .await
+      .unwrap()
+      .unwrap();
+  }
+
+  #[tokio::test]
+  async fn cancelled_queued_requests_are_scrubbed_without_transport() {
+    let (probe, result) = tokio::sync::oneshot::channel();
+    let ipc = Ipc::new();
+    ipc
+      .queue_request(probed_secret(move |scrubbed| probe.send(scrubbed).unwrap()))
+      .await;
+
+    let mut state = Greeter::default();
+    state.auth_state = AuthState::ContinuingAuth;
+    ipc.cancel(&mut state);
+    let greeter = Arc::new(RwLock::new(state));
+    let (controls, _control_rx) = tokio_mpsc::unbounded_channel();
+    let (renders, _render_rx) = tokio_mpsc::channel(1);
+    let actor = tokio::spawn({
+      let ipc = ipc.clone();
+      async move { ipc.run(greeter, controls, renders).await }
+    });
+
+    assert!(
+      tokio::time::timeout(Duration::from_secs(1), result)
+        .await
+        .unwrap()
+        .unwrap()
+    );
+    ipc.shutdown();
+    tokio::time::timeout(Duration::from_secs(1), actor)
+      .await
+      .unwrap()
+      .unwrap();
   }
 
   #[tokio::test]
@@ -993,10 +1136,10 @@ mod test {
       .await
       .unwrap();
     assert_eq!(greeter.auth_state, AuthState::ContinuingAuth);
-    assert!(matches!(
-      ipc.next().await,
-      Some(Request::PostAuthMessageResponse { response: None })
-    ));
+    let request = ipc.next().await.unwrap();
+    assert!(matches!(request.as_ref(), Request::PostAuthMessageResponse {
+      response: None
+    }));
   }
 
   #[tokio::test]
@@ -1015,9 +1158,10 @@ mod test {
       .unwrap();
 
     assert_eq!(greeter.auth_state, AuthState::CreatingSession);
+    let request = ipc.next().await.unwrap();
     assert!(matches!(
-      ipc.next().await,
-      Some(Request::CreateSession { username }) if username == "alice"
+      request.as_ref(),
+      Request::CreateSession { username } if username == "alice"
     ));
   }
 
@@ -1331,9 +1475,10 @@ mod test {
       .await
       .unwrap();
 
+    let request = ipc.next().await.unwrap();
     assert!(matches!(
-      ipc.next().await,
-      Some(Request::StartSession { cmd, .. }) if cmd == ["actual-session --flag"]
+      request.as_ref(),
+      Request::StartSession { cmd, .. } if cmd.as_slice() == ["actual-session --flag"]
     ));
   }
 

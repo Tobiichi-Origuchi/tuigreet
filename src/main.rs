@@ -8,6 +8,7 @@ mod event;
 mod greeter;
 mod info;
 mod ipc;
+mod ipc_codec;
 mod keyboard;
 mod logger;
 mod power;

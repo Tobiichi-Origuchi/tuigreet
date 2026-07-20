@@ -244,14 +244,14 @@ pub async fn handle_with_power(
       Mode::Password => {
         greeter.auth_state = crate::ipc::AuthState::ContinuingAuth;
         greeter.message = None;
+        let response = std::mem::take(&mut greeter.buffer);
 
         ipc
           .send(Request::PostAuthMessageResponse {
-            response: Some(greeter.buffer.clone()),
+            response: Some(response),
           })
           .await;
 
-        greeter.buffer = String::new();
         greeter.response_cursor = 0;
         greeter.input_warning = None;
       },
@@ -553,7 +553,7 @@ mod test {
     Mode,
     cache::{CacheStore, CacheUpdate, RememberedSelection, RememberedUser},
     event::Control,
-    ipc::Ipc,
+    ipc::{AuthInput, Ipc},
     power::PowerOption,
     ui::{
       common::masked::MaskedString,
@@ -622,6 +622,33 @@ mod test {
 
     assert_eq!(complete_username(&mut greeter), Completion::None);
     assert!(greeter.username.value.is_empty());
+  }
+
+  #[tokio::test]
+  async fn password_submission_moves_the_original_allocation_into_ipc() {
+    let mut state = Greeter::default();
+    state.mode = Mode::Password;
+    state.auth_state = crate::ipc::AuthState::AwaitingInput(AuthInput::Secret);
+    state.buffer = String::from("password allocation");
+    let original = state.buffer.as_ptr();
+    let greeter = Arc::new(RwLock::new(state));
+    let ipc = Ipc::new();
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+      ipc.clone(),
+    )
+    .await
+    .unwrap();
+
+    assert!(greeter.read().await.buffer.is_empty());
+    let request = ipc.next().await.unwrap();
+    assert!(matches!(
+      request.as_ref(),
+      Request::PostAuthMessageResponse { response: Some(response) }
+        if response == "password allocation" && response.as_ptr() == original
+    ));
   }
 
   #[tokio::test]
@@ -1272,9 +1299,10 @@ mod test {
     assert_eq!(state.auth_state, crate::ipc::AuthState::CreatingSession);
     assert!(matches!(state.session_source, SessionSource::Session(0)));
     drop(state);
+    let request = ipc.next().await.unwrap();
     assert!(matches!(
-      ipc.next().await,
-      Some(Request::CreateSession { username }) if username == "alice"
+      request.as_ref(),
+      Request::CreateSession { username } if username == "alice"
     ));
   }
 

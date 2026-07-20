@@ -1672,22 +1672,31 @@ where
             index += 1;
           } else if let Some(raw_value) = args.get(index + 1).map(AsRef::as_ref) {
             match raw_value.to_str() {
-              Some(value) => retain_option(
-                option_index,
-                specification,
-                Some(value),
-                argument,
-                &mut seen,
-                &mut recovered,
-                &mut warnings,
-              ),
-              None => warnings.push(format!(
-                "argument {raw_value:?} to option '{name}' is not valid UTF-8; ignoring {argument} and its argument"
-              )),
+              Some(value) if !is_option(value) => {
+                retain_option(
+                  option_index,
+                  specification,
+                  Some(value),
+                  argument,
+                  &mut seen,
+                  &mut recovered,
+                  &mut warnings,
+                );
+                index += 2;
+              },
+              Some(_) => {
+                warn_missing_value(name, argument, &mut warnings);
+                index += 1;
+              },
+              None => {
+                warnings.push(format!(
+                  "argument {raw_value:?} to option '{name}' is not valid UTF-8; ignoring {argument} and its argument"
+                ));
+                index += 2;
+              },
             }
-            index += 2;
           } else {
-            warnings.push(format!("Argument to option '{name}' missing; ignoring {argument}"));
+            warn_missing_value(name, argument, &mut warnings);
             index += 1;
           }
         },
@@ -1737,22 +1746,28 @@ where
           OptionArgument::Required => {
             if let Some(raw_value) = args.get(index + 1).map(AsRef::as_ref) {
               match raw_value.to_str() {
-                Some(value) => retain_option(
-                  option_index,
-                  specification,
-                  Some(value),
-                  argument,
-                  &mut seen,
-                  &mut recovered,
-                  &mut warnings,
-                ),
-                None => warnings.push(format!(
-                  "argument {raw_value:?} to option '{short}' is not valid UTF-8; ignoring {argument} and its argument"
-                )),
+                Some(value) if !is_option(value) => {
+                  retain_option(
+                    option_index,
+                    specification,
+                    Some(value),
+                    argument,
+                    &mut seen,
+                    &mut recovered,
+                    &mut warnings,
+                  );
+                  consumed_next = true;
+                },
+                Some(_) => warn_missing_value(&short.to_string(), argument, &mut warnings),
+                None => {
+                  warnings.push(format!(
+                    "argument {raw_value:?} to option '{short}' is not valid UTF-8; ignoring {argument} and its argument"
+                  ));
+                  consumed_next = true;
+                },
               }
-              consumed_next = true;
             } else {
-              warnings.push(format!("Argument to option '{short}' missing; ignoring {argument}"));
+              warn_missing_value(&short.to_string(), argument, &mut warnings);
             }
           },
           OptionArgument::Optional => {
@@ -1836,6 +1851,12 @@ fn retain_option(
 
 fn is_option(argument: &str) -> bool {
   argument.starts_with('-') && argument.len() > 1
+}
+
+fn warn_missing_value(name: &str, spelling: &str, warnings: &mut Vec<String>) {
+  warnings.push(format!(
+    "Argument to option '{name}' missing; ignoring {spelling} (a value beginning with '-' must be attached to the option)"
+  ));
 }
 
 fn warn_unknown(name: &str, spelling: &str, warnings: &mut Vec<String>) {
@@ -2345,14 +2366,20 @@ mod test {
   }
 
   #[test]
-  fn information_spellings_used_as_values_do_not_become_actions() {
+  fn option_like_values_must_be_attached() {
     let invocation = CliInvocation::parse(["tuigreet", "--config", "--help", "--version"]);
-    assert_eq!(invocation.action(), CliAction::Version);
-    assert_eq!(invocation.matches().opt_str("config").as_deref(), Some("--help"));
+    assert_eq!(invocation.action(), CliAction::Help);
+    assert!(!invocation.matches().opt_present("config"));
+    assert_eq!(invocation.warnings().len(), 1);
+    assert!(invocation.warnings()[0].contains("Argument to option 'config' missing"));
 
     let invocation = CliInvocation::parse(["tuigreet", "-c-h"]);
     assert_eq!(invocation.action(), CliAction::Run);
     assert_eq!(invocation.matches().opt_str("cmd").as_deref(), Some("-h"));
+
+    let invocation = CliInvocation::parse(["tuigreet", "--width=-1", "--mock"]);
+    assert_eq!(invocation.matches().opt_str("width").as_deref(), Some("-1"));
+    assert!(invocation.matches().opt_present("mock"));
 
     let invocation = CliInvocation::parse(["tuigreet", "--debug", "--help"]);
     assert_eq!(invocation.action(), CliAction::Help);
@@ -2491,6 +2518,25 @@ mod test {
     assert!(!matches.opt_present("cmd"));
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("Argument to option 'c' missing"));
+
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &[
+      "--allow-command-editor",
+      "--width",
+      "--no-command-editor",
+      "--mock",
+    ]);
+    assert!(matches.opt_present("allow-command-editor"));
+    assert!(!matches.opt_present("width"));
+    assert!(matches.opt_present("no-command-editor"));
+    assert!(matches.opt_present("mock"));
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Argument to option 'width' missing"));
+
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &["-w", "--no-command-editor"]);
+    assert!(!matches.opt_present("width"));
+    assert!(matches.opt_present("no-command-editor"));
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Argument to option 'w' missing"));
   }
 
   #[test]

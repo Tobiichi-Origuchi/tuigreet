@@ -117,7 +117,7 @@ fn read_battery_info(root: &Path) -> Option<BatteryInfo> {
   let mut entries = fs::read_dir(root).ok()?.flatten().collect::<Vec<_>>();
   entries.sort_by_key(|entry| entry.file_name());
 
-  let mut percentages = Vec::new();
+  let mut samples = Vec::new();
   let mut charging = false;
   for entry in entries {
     let path = entry.path();
@@ -127,30 +127,86 @@ fn read_battery_info(root: &Path) -> Option<BatteryInfo> {
       continue;
     }
 
-    let percentage = ratio(&path, "energy_now", "energy_full")
-      .or_else(|| ratio(&path, "charge_now", "charge_full"))
-      .or_else(|| read_number(&path.join("capacity")).map(|value| value.min(100) as u8));
-    if let Some(percentage) = percentage {
-      percentages.push(u64::from(percentage));
+    let sample = raw_ratio(&path, "energy_now", "energy_full")
+      .map(|(current, full)| BatterySample::Energy { current, full })
+      .or_else(|| {
+        raw_ratio(&path, "charge_now", "charge_full").map(|(current, full)| BatterySample::Charge { current, full })
+      })
+      .or_else(|| read_number(&path.join("capacity")).map(|value| BatterySample::Capacity(value.min(100) as u8)));
+    if let Some(sample) = sample {
+      samples.push(sample);
       charging |= read_trimmed(&path.join("status")).is_some_and(|status| status == "Charging");
     }
   }
 
-  let count = u64::try_from(percentages.len()).ok()?;
-  (count != 0).then(|| BatteryInfo {
-    percentage: u8::try_from(percentages.iter().sum::<u64>() / count).unwrap_or(100),
-    charging,
+  aggregate_percentage(&samples).map(|percentage| BatteryInfo { percentage, charging })
+}
+
+#[derive(Clone, Copy)]
+enum BatterySample {
+  Energy { current: u64, full: u64 },
+  Charge { current: u64, full: u64 },
+  Capacity(u8),
+}
+
+impl BatterySample {
+  fn percentage(self) -> u8 {
+    match self {
+      Self::Energy { current, full } | Self::Charge { current, full } => percentage(current.into(), full.into()),
+      Self::Capacity(value) => value,
+    }
+  }
+}
+
+fn aggregate_percentage(samples: &[BatterySample]) -> Option<u8> {
+  if samples.is_empty() {
+    return None;
+  }
+
+  let aggregate = |select: fn(BatterySample) -> Option<(u64, u64)>| {
+    samples
+      .iter()
+      .copied()
+      .map(select)
+      .try_fold((0_u128, 0_u128), |(current, full), values| {
+        values.map(|(next_current, next_full)| (current + u128::from(next_current), full + u128::from(next_full)))
+      })
+      .map(|(current, full)| percentage(current, full))
+  };
+
+  aggregate(|sample| match sample {
+    BatterySample::Energy { current, full } => Some((current, full)),
+    _ => None,
+  })
+  .or_else(|| {
+    aggregate(|sample| match sample {
+      BatterySample::Charge { current, full } => Some((current, full)),
+      _ => None,
+    })
+  })
+  .or_else(|| {
+    let count = u64::try_from(samples.len()).ok()?;
+    (count != 0).then(|| {
+      let total = samples
+        .iter()
+        .copied()
+        .map(BatterySample::percentage)
+        .map(u64::from)
+        .sum::<u64>();
+      u8::try_from(total / count).unwrap_or(100)
+    })
   })
 }
 
-fn ratio(root: &Path, current: &str, full: &str) -> Option<u8> {
+fn raw_ratio(root: &Path, current: &str, full: &str) -> Option<(u64, u64)> {
   let current = read_number(&root.join(current))?;
   let full = read_number(&root.join(full))?;
-  if full == 0 {
-    return None;
-  }
-  let percentage = current.saturating_mul(100).checked_div(full)?.min(100);
-  u8::try_from(percentage).ok()
+  (full != 0).then_some((current, full))
+}
+
+fn percentage(current: u128, full: u128) -> u8 {
+  let percentage = current.saturating_mul(100).checked_div(full).unwrap_or(0).min(100);
+  u8::try_from(percentage).unwrap_or(100)
 }
 
 fn read_number(path: &Path) -> Option<u64> {
@@ -200,6 +256,41 @@ mod tests {
         charging: true,
       })
     );
+  }
+
+  #[test]
+  fn compatible_batteries_are_weighted_by_their_full_capacity() {
+    let directory = tempdir().unwrap();
+    write_supply(directory.path(), "BAT0", &[
+      ("type", "Battery"),
+      ("energy_now", "30"),
+      ("energy_full", "60"),
+      ("status", "Discharging"),
+    ]);
+    write_supply(directory.path(), "BAT1", &[
+      ("type", "Battery"),
+      ("energy_now", "90"),
+      ("energy_full", "100"),
+      ("status", "Charging"),
+    ]);
+
+    assert_eq!(
+      read_battery_info(directory.path()),
+      Some(BatteryInfo {
+        percentage: 75,
+        charging: true,
+      })
+    );
+  }
+
+  #[test]
+  fn incompatible_measurement_units_fall_back_to_per_battery_percentages() {
+    let samples = [
+      BatterySample::Energy { current: 30, full: 60 },
+      BatterySample::Charge { current: 90, full: 100 },
+      BatterySample::Capacity(70),
+    ];
+    assert_eq!(aggregate_percentage(&samples), Some(70));
   }
 
   #[test]

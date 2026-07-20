@@ -28,10 +28,7 @@ use crate::{
   },
 };
 
-static XDG_DATA_DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
-  let value = env::var("XDG_DATA_DIRS").unwrap_or("/usr/local/share:/usr/share".to_string());
-  env::split_paths(&value).filter(|p| p.is_absolute()).collect()
-});
+static XDG_DATA_DIRS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| xdg_data_dirs(env::var_os("XDG_DATA_DIRS")));
 static DEFAULT_SESSION_PATHS: LazyLock<Vec<(PathBuf, SessionType)>> = LazyLock::new(|| {
   XDG_DATA_DIRS
     .iter()
@@ -39,6 +36,13 @@ static DEFAULT_SESSION_PATHS: LazyLock<Vec<(PathBuf, SessionType)>> = LazyLock::
     .chain(XDG_DATA_DIRS.iter().map(|p| (p.join("xsessions"), SessionType::X11)))
     .collect()
 });
+
+fn xdg_data_dirs(value: Option<OsString>) -> Vec<PathBuf> {
+  let value = value
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| OsString::from("/usr/local/share:/usr/share"));
+  env::split_paths(&value).filter(|path| path.is_absolute()).collect()
+}
 
 pub fn get_hostname() -> String {
   match utsname::uname() {
@@ -611,6 +615,7 @@ fn validate_desktop_structure(source: &str) -> Result<(), io::Error> {
   let mut current_group = None::<String>;
   let mut groups = HashSet::<String>::new();
   let mut keys = HashSet::<(String, String)>::new();
+  let mut first_group_seen = false;
 
   for (index, line) in source.lines().enumerate() {
     match parse_line(line).map_err(|error| {
@@ -620,6 +625,21 @@ fn validate_desktop_structure(source: &str) -> Result<(), io::Error> {
       )
     })? {
       Line::Group(group) => {
+        if !line.ends_with(']') || line.get(1..line.len() - 1) != Some(group) || !valid_group_name(group) {
+          return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("line {} has an invalid group header", index + 1),
+          ));
+        }
+        if !first_group_seen {
+          first_group_seen = true;
+          if group != "Desktop Entry" {
+            return Err(io::Error::new(
+              io::ErrorKind::InvalidData,
+              format!("line {} precedes the required [Desktop Entry] group", index + 1),
+            ));
+          }
+        }
         if !groups.insert(group.to_string()) {
           return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -635,7 +655,23 @@ fn validate_desktop_structure(source: &str) -> Result<(), io::Error> {
             format!("line {} defines {key:?} before any group", index + 1),
           )
         })?;
-        let key = key.trim();
+        let key = key.trim_matches(' ');
+        if !valid_desktop_key(key) {
+          return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("line {} has an invalid key name {key:?}", index + 1),
+          ));
+        }
+        let value = line
+          .split_once('=')
+          .map(|(_, value)| value.trim_start_matches(' '))
+          .unwrap_or_default();
+        if value.chars().any(char::is_control) {
+          return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("line {} contains a control character in its value", index + 1),
+          ));
+        }
         if !keys.insert((group.clone(), key.to_string())) {
           return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -648,6 +684,67 @@ fn validate_desktop_structure(source: &str) -> Result<(), io::Error> {
   }
 
   Ok(())
+}
+
+fn valid_group_name(group: &str) -> bool {
+  !group.is_empty()
+    && group.is_ascii()
+    && !group
+      .bytes()
+      .any(|byte| byte.is_ascii_control() || matches!(byte, b'[' | b']'))
+}
+
+fn valid_desktop_key(key: &str) -> bool {
+  let (base, locale) = match key.find('[') {
+    Some(open) if key.ends_with(']') && !key[open + 1..key.len() - 1].contains(['[', ']']) => {
+      (&key[..open], Some(&key[open + 1..key.len() - 1]))
+    },
+    Some(_) => return false,
+    None if key.contains(']') => return false,
+    None => (key, None),
+  };
+
+  !base.is_empty()
+    && base.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    && locale.is_none_or(valid_locale_suffix)
+}
+
+fn valid_locale_suffix(locale: &str) -> bool {
+  if locale.is_empty() || !locale.is_ascii() {
+    return false;
+  }
+
+  let Some((before_modifier, modifier)) = split_optional_once(locale, '@') else {
+    return false;
+  };
+  let Some((before_encoding, encoding)) = split_optional_once(before_modifier, '.') else {
+    return false;
+  };
+  let Some((language, country)) = split_optional_once(before_encoding, '_') else {
+    return false;
+  };
+
+  valid_locale_component(language, true)
+    && country.is_none_or(|value| valid_locale_component(value, false))
+    && encoding.is_none_or(|value| valid_locale_component(value, true))
+    && modifier.is_none_or(|value| valid_locale_component(value, true))
+}
+
+fn split_optional_once(value: &str, delimiter: char) -> Option<(&str, Option<&str>)> {
+  match value.split_once(delimiter) {
+    Some((before, after)) if !before.is_empty() && !after.is_empty() && !after.contains(delimiter) => {
+      Some((before, Some(after)))
+    },
+    Some(_) => None,
+    None => Some((value, None)),
+  }
+}
+
+fn valid_locale_component(value: &str, allow_dash_and_underscore: bool) -> bool {
+  !value.is_empty()
+    && value
+      .bytes()
+      .all(|byte| byte.is_ascii_alphanumeric() || (allow_dash_and_underscore && matches!(byte, b'-' | b'_')))
 }
 
 fn desktop_bool(desktop: &DesktopEntry, key: &str) -> Result<bool, io::Error> {
@@ -735,6 +832,7 @@ mod capslock_tests {
 #[cfg(test)]
 mod session_tests {
   use std::{
+    ffi::OsString,
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -742,7 +840,7 @@ mod session_tests {
 
   use tempfile::tempdir;
 
-  use super::{effective_session_paths, get_sessions, load_desktop_file};
+  use super::{effective_session_paths, get_sessions, load_desktop_file, validate_desktop_structure, xdg_data_dirs};
   use crate::ui::sessions::SessionType;
 
   fn write_desktop(directory: &Path, name: &str, contents: &str) -> PathBuf {
@@ -825,6 +923,29 @@ mod session_tests {
   }
 
   #[test]
+  fn rejects_malformed_desktop_entry_structure() {
+    for source in [
+      "[Other]\nName=Wrong first group\n[Desktop Entry]\nType=Application\nExec=session\n",
+      "[Desktop Entry] trailing\nType=Application\nName=Trailing\nExec=session\n",
+      "[]\nType=Application\nName=Empty group\nExec=session\n",
+      "[Desktop Entry]\nType=Application\nBad_Key=value\nName=Bad key\nExec=session\n",
+      "[Desktop Entry]\nType=Application\nName[en][US]=Bad locale\nName=Bad locale\nExec=session\n",
+      "[Desktop Entry]\nType=Application\nName=Raw\ttab\nExec=session\n",
+    ] {
+      assert!(
+        validate_desktop_structure(source).is_err(),
+        "accepted malformed Desktop Entry source {source:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn accepts_specified_group_key_and_locale_syntax() {
+    let source = "# comment\n[Desktop Entry]\nType = Application\nName = Default\nName[en_US.UTF-8@latin] = Localized\nExec = session\n[X-Project Extra]\nArbitrary-Key = value\n";
+    assert!(validate_desktop_structure(source).is_ok());
+  }
+
+  #[test]
   fn hidden_and_unavailable_sessions_are_ignored() {
     let root = tempdir().unwrap();
     let hidden = write_desktop(
@@ -886,6 +1007,17 @@ mod session_tests {
     assert_eq!(effective_session_paths(&[], &["/custom/x11".to_string()], &defaults), [
       (PathBuf::from("/default/wayland"), SessionType::Wayland),
       (PathBuf::from("/custom/x11"), SessionType::X11),
+    ]);
+  }
+
+  #[test]
+  fn empty_and_unset_xdg_data_dirs_use_the_specified_defaults() {
+    let expected = [PathBuf::from("/usr/local/share"), PathBuf::from("/usr/share")];
+    assert_eq!(xdg_data_dirs(None), expected);
+    assert_eq!(xdg_data_dirs(Some(OsString::new())), expected);
+    assert_eq!(xdg_data_dirs(Some(OsString::from("relative:/opt/share:/srv/share"))), [
+      PathBuf::from("/opt/share"),
+      PathBuf::from("/srv/share")
     ]);
   }
 }

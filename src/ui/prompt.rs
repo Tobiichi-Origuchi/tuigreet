@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::{borrow::Cow, sync::LazyLock};
 
 use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -28,13 +28,32 @@ fn mask_secret(pool: &str, length: usize) -> String {
   pool.graphemes(true).cycle().take(length).collect()
 }
 
+fn masked_cursor(pool: &str, length: usize) -> usize {
+  pool
+    .graphemes(true)
+    .map(str::len)
+    .cycle()
+    .take(length)
+    .fold(0, usize::saturating_add)
+}
+
 pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
   let theme = &greeter.theme;
-
-  let container = get_rect(greeter, area, 0);
-
   let container_padding = greeter.container_padding();
   let prompt_padding = greeter.prompt_padding();
+  let width = greeter.width().min(area.width);
+  let content_width = width.saturating_sub(container_padding.saturating_mul(2));
+  let (greeting, greeting_height) = get_greeting_height(greeter, content_width, 0);
+  let container_height = get_height_with_greeting(greeter, greeting_height);
+  let should_display_answer = greeter.mode == Mode::Password && greeter.prompt.is_some();
+  let minimum_container_height = container_padding
+    .saturating_mul(2)
+    .saturating_add(1)
+    .saturating_add(u16::from(should_display_answer));
+  let visible_message = greeter.input_warning.as_deref().or(greeter.message.as_deref());
+  let (message, message_height) = get_message_height(visible_message, width);
+  let feedback = feedback_layout(area, width, container_height, minimum_container_height, message_height);
+  let container = feedback.container;
   let greeting_alignment = match greeter.greet_align() {
     GreetAlign::Center => Alignment::Center,
     GreetAlign::Left => Alignment::Left,
@@ -54,17 +73,22 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
 
   f.render_widget(block, container);
 
-  let visible_message = greeter.input_warning.as_deref().or(greeter.message.as_deref());
-  let (message, message_height) = get_message_height(visible_message, container.width, container_padding, 1);
-  let (greeting, greeting_height) = get_greeting_height(greeter, frame.width, 0);
-
-  let should_display_answer = greeter.mode == Mode::Password;
+  let available = frame.height;
+  let answer_height = u16::from(should_display_answer).min(available);
+  let username_height = 1.min(available.saturating_sub(answer_height));
+  let remaining = available.saturating_sub(answer_height).saturating_sub(username_height);
+  let visible_greeting_height = greeting_height.min(remaining);
+  let visible_prompt_padding = if should_display_answer {
+    prompt_padding.min(remaining.saturating_sub(visible_greeting_height))
+  } else {
+    0
+  };
 
   let constraints = [
-    Constraint::Length(greeting_height), // Greeting
-    Constraint::Length(1),               // Username
-    Constraint::Length(if should_display_answer { prompt_padding } else { 0 }), // Prompt padding
-    Constraint::Length(if should_display_answer { 1 } else { 0 }), // Answer
+    Constraint::Length(visible_greeting_height), // Greeting
+    Constraint::Length(username_height),         // Username
+    Constraint::Length(visible_prompt_padding),  // Prompt padding
+    Constraint::Length(answer_height),           // Answer
   ];
 
   let chunks = Layout::default()
@@ -78,11 +102,11 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
   }
 
   let username_label = if greeter.user_menu && greeter.username.value.is_empty() {
-    let prompt_text = Span::from(text!(greeter, select_user));
+    let prompt_text = Span::from(greeter.text.select_user.as_str());
 
     Paragraph::new(prompt_text).alignment(Alignment::Center)
   } else {
-    let username_text = prompt_value(theme, Some(text!(greeter, username)));
+    let username_text = prompt_value(theme, Some(greeter.text.username.as_str()));
 
     Paragraph::new(username_text)
   };
@@ -95,8 +119,8 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
       f.render_widget(username_label, chunks[USERNAME_INDEX]);
 
       if !greeter.user_menu || !greeter.username.value.is_empty() {
-        let label = text!(greeter, username);
-        let username_area = input_area(chunks[USERNAME_INDEX], &label);
+        let label = greeter.text.username.as_str();
+        let username_area = input_area(chunks[USERNAME_INDEX], label);
         let username_cursor = if greeter.mode != Mode::Username {
           0
         } else if greeter.username.mask.is_some() {
@@ -111,9 +135,9 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
       }
 
       let answer_text = if greeter.auth_state.is_waiting() {
-        Span::from(text!(greeter, wait))
+        Span::from(greeter.text.wait.as_str())
       } else {
-        prompt_value(theme, greeter.prompt.as_ref())
+        prompt_value(theme, greeter.prompt.as_deref())
       };
 
       let answer_label = Paragraph::new(answer_text);
@@ -123,19 +147,27 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
 
         if !greeter.asking_for_secret || greeter.secret_display.show() {
           let value = match (greeter.asking_for_secret, &greeter.secret_display) {
-            (true, SecretDisplay::Character(pool)) => mask_secret(pool, greeter.buffer.graphemes(true).count()),
-            _ => greeter.buffer.clone(),
+            (true, SecretDisplay::Character(pool)) => {
+              Cow::Owned(mask_secret(pool, greeter.buffer.graphemes(true).count()))
+            },
+            _ => Cow::Borrowed(greeter.buffer.as_str()),
           };
           let prompt = greeter.prompt.as_deref().unwrap_or_default();
           let answer_area = input_area(chunks[ANSWER_INDEX], prompt);
           let answer_cursor = match (greeter.asking_for_secret, &greeter.secret_display) {
             (true, SecretDisplay::Character(pool)) => {
               let entered = input::grapheme_count_before(&greeter.buffer, greeter.response_cursor);
-              mask_secret(pool, entered).len()
+              masked_cursor(pool, entered)
             },
             _ => greeter.response_cursor,
           };
-          cursor = render_input(f, answer_area, &value, answer_cursor, theme.of(&[Themed::Input]));
+          cursor = render_input(
+            f,
+            answer_area,
+            value.as_ref(),
+            answer_cursor,
+            theme.of(&[Themed::Input]),
+          );
         } else {
           let prompt = greeter.prompt.as_deref().unwrap_or_default();
           let answer_area = input_area(chunks[ANSWER_INDEX], prompt);
@@ -144,10 +176,10 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
       }
 
       if let Some(message) = message {
-        let message = message.alignment(Alignment::Center);
-        let y = container.bottom();
-        let height = message_height.min(area.bottom().saturating_sub(y));
-        f.render_widget(message, Rect::new(container.x, y, container.width, height));
+        let message = message
+          .alignment(Alignment::Center)
+          .scroll((feedback.message_scroll, 0));
+        f.render_widget(message, feedback.message);
       }
     },
 
@@ -173,7 +205,7 @@ fn area_cursor(area: Rect, column: u16) -> Option<(u16, u16)> {
 
 #[cfg(test)]
 mod tests {
-  use super::mask_secret;
+  use super::{mask_secret, masked_cursor};
 
   #[test]
   fn secret_mask_cycles_configured_characters() {
@@ -191,5 +223,14 @@ mod tests {
   #[test]
   fn secret_mask_cycles_extended_graphemes() {
     assert_eq!(mask_secret("👩‍💻界", 3), "👩‍💻界👩‍💻");
+  }
+
+  #[test]
+  fn secret_mask_cursor_uses_the_repeated_pool_without_allocating_a_prefix() {
+    assert_eq!(masked_cursor("a界", 0), 0);
+    assert_eq!(masked_cursor("a界", 1), "a".len());
+    assert_eq!(masked_cursor("a界", 2), "a界".len());
+    assert_eq!(masked_cursor("a界", 3), "a界a".len());
+    assert_eq!(masked_cursor("", 4), 0);
   }
 }

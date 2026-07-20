@@ -41,7 +41,15 @@ pub fn should_hide_cursor(greeter: &Greeter) -> bool {
 // |                        | <- container padding
 // +------------------------+
 pub fn get_height(greeter: &Greeter, content_width: u16) -> u16 {
-  let (_, greeting_height) = get_greeting_height(greeter, content_width, 0);
+  let greeting_height = match greeter.mode {
+    Mode::Command | Mode::Sessions | Mode::Power | Mode::Processing => 0,
+    _ => get_greeting_height(greeter, content_width, 0).1,
+  };
+
+  get_height_with_greeting(greeter, greeting_height)
+}
+
+pub fn get_height_with_greeting(greeter: &Greeter, greeting_height: u16) -> u16 {
   let container_padding = greeter.container_padding();
   let prompt_padding = greeter.prompt_padding();
 
@@ -76,6 +84,57 @@ pub fn get_rect(greeter: &Greeter, area: Rect, items: usize) -> Rect {
   Rect::new(x, y, width, height)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeedbackLayout {
+  pub container: Rect,
+  pub message: Rect,
+  pub message_scroll: u16,
+}
+
+/// Center a main container and its feedback as one visual block.
+///
+/// The main container keeps at least its essential height and then receives
+/// space up to its preferred height. When any row remains, feedback retains
+/// one newest wrapped line; a visual gap is added only when another row is
+/// available. This keeps authentication usable without hiding the diagnostic
+/// that explains why it needs attention.
+pub fn feedback_layout(
+  area: Rect,
+  requested_width: u16,
+  preferred_container_height: u16,
+  minimum_container_height: u16,
+  requested_message_height: u16,
+) -> FeedbackLayout {
+  let width = requested_width.min(area.width);
+  let minimum_container_height = minimum_container_height
+    .min(preferred_container_height)
+    .min(area.height);
+  let reserved_message = u16::from(requested_message_height > 0 && area.height > minimum_container_height);
+  let reserved_gap =
+    u16::from(reserved_message > 0 && area.height > minimum_container_height.saturating_add(reserved_message));
+  let maximum_container_height = area
+    .height
+    .saturating_sub(reserved_message)
+    .saturating_sub(reserved_gap);
+  let container_height = preferred_container_height
+    .min(maximum_container_height)
+    .max(minimum_container_height);
+  let remaining = area.height.saturating_sub(container_height);
+  let gap = u16::from(requested_message_height > 0 && remaining > 1);
+  let message_height = requested_message_height.min(remaining.saturating_sub(gap));
+  let total_height = container_height.saturating_add(gap).saturating_add(message_height);
+  let x = area.x.saturating_add(area.width.saturating_sub(width) / 2);
+  let y = area.y.saturating_add(area.height.saturating_sub(total_height) / 2);
+  let container = Rect::new(x, y, width, container_height);
+  let message = Rect::new(x, container.bottom().saturating_add(gap), width, message_height);
+
+  FeedbackLayout {
+    container,
+    message,
+    message_scroll: requested_message_height.saturating_sub(message_height),
+  }
+}
+
 pub fn inset(area: Rect, margin: u16) -> Rect {
   let doubled = margin.saturating_mul(2);
   Rect::new(
@@ -102,12 +161,12 @@ pub fn input_area(area: Rect, label: &str) -> Rect {
 
 pub fn get_greeting_height(greeter: &Greeter, width: u16, fallback: u16) -> (Option<Paragraph<'_>>, u16) {
   if let Some(greeting) = &greeter.greeting {
-    let text = match greeting.clone().into_text() {
+    let text = match greeting.to_text() {
       Ok(text) => text,
       Err(_) => Text::raw(greeting),
     };
 
-    let paragraph = Paragraph::new(text.clone()).wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     if width == 0 {
       return (Some(paragraph), 0);
     }
@@ -119,12 +178,7 @@ pub fn get_greeting_height(greeter: &Greeter, width: u16, fallback: u16) -> (Opt
   }
 }
 
-pub fn get_message_height(
-  message: Option<&str>,
-  width: u16,
-  padding: u16,
-  fallback: u16,
-) -> (Option<Paragraph<'_>>, u16) {
+pub fn get_message_height(message: Option<&str>, width: u16) -> (Option<Paragraph<'_>>, u16) {
   if let Some(message) = message {
     let paragraph = Paragraph::new(message.trim_end()).wrap(Wrap { trim: true });
     if width == 0 {
@@ -132,12 +186,9 @@ pub fn get_message_height(
     }
     let height = paragraph.line_count(width);
 
-    (
-      Some(paragraph),
-      u16::try_from(height).unwrap_or(u16::MAX).saturating_add(padding),
-    )
+    (Some(paragraph), u16::try_from(height).unwrap_or(u16::MAX))
   } else {
-    (None, fallback)
+    (None, 0)
   }
 }
 
@@ -150,7 +201,7 @@ mod test {
     widgets::{Paragraph, Wrap},
   };
 
-  use super::{get_rect, input_area};
+  use super::{feedback_layout, get_rect, input_area};
   use crate::{
     Greeter,
     Mode,
@@ -256,6 +307,38 @@ mod test {
       get_rect(&greeter, Rect::new(0, 0, 100, 100), 1),
       Rect::new(25, 47, 50, 6)
     );
+  }
+
+  #[test]
+  fn feedback_centers_the_container_and_message_as_one_block_after_clipping_width() {
+    let area = Rect::new(10, 20, 40, 20);
+    let layout = feedback_layout(area, 80, 5, 3, 3);
+
+    assert_eq!(layout.container, Rect::new(10, 25, 40, 5));
+    assert_eq!(layout.message, Rect::new(10, 31, 40, 3));
+    assert_eq!(layout.message_scroll, 0);
+    assert_eq!(layout.container.y.saturating_sub(area.y), 5);
+    assert_eq!(area.bottom().saturating_sub(layout.message.bottom()), 6);
+  }
+
+  #[test]
+  fn feedback_prioritizes_the_container_and_scrolls_to_the_latest_line() {
+    let area = Rect::new(2, 3, 20, 6);
+    let layout = feedback_layout(area, 20, 4, 4, 10);
+
+    assert_eq!(layout.container, Rect::new(2, 3, 20, 4));
+    assert_eq!(layout.message, Rect::new(2, 8, 20, 1));
+    assert_eq!(layout.message_scroll, 9);
+  }
+
+  #[test]
+  fn feedback_layout_saturates_extreme_geometry_inside_the_available_area() {
+    let area = Rect::new(u16::MAX - 5, u16::MAX - 5, 5, 5);
+    let layout = feedback_layout(area, u16::MAX, u16::MAX, u16::MAX, u16::MAX);
+
+    assert_eq!(layout.container, area);
+    assert_eq!(layout.message, Rect::new(area.x, area.bottom(), area.width, 0));
+    assert_eq!(layout.message_scroll, u16::MAX);
   }
 
   // | Username: __________________________ |

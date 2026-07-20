@@ -78,14 +78,11 @@ where
     None
   }
 
-  fn get_option<'g, S>(name: S, index: usize, selected: usize) -> Span<'g>
-  where
-    S: Into<String>,
-  {
+  fn get_option(name: Cow<'_, str>, index: usize, selected: usize) -> Span<'_> {
     if selected == index {
-      Span::styled(name.into(), Style::default().add_modifier(Modifier::REVERSED))
+      Span::styled(name, Style::default().add_modifier(Modifier::REVERSED))
     } else {
-      Span::from(name.into())
+      Span::from(name)
     }
   }
 }

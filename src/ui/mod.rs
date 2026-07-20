@@ -228,12 +228,9 @@ where
   Span::from(buttonize(&text.into())).style(style)
 }
 
-fn prompt_value<'s, S>(theme: &Theme, text: Option<S>) -> Span<'s>
-where
-  S: Into<String>,
-{
+fn prompt_value<'s>(theme: &Theme, text: Option<&'s str>) -> Span<'s> {
   match text {
-    Some(text) => Span::styled(text.into(), theme.of(&[Themed::Prompt]).add_modifier(Modifier::BOLD)),
+    Some(text) => Span::styled(text, theme.of(&[Themed::Prompt]).add_modifier(Modifier::BOLD)),
     None => Span::from(""),
   }
 }
@@ -245,7 +242,7 @@ mod tests {
   use ratatui::{
     Terminal,
     backend::{Backend, ClearType, TestBackend, WindowSize},
-    buffer::Cell,
+    buffer::{Buffer, Cell},
     layout::{Position, Rect, Size},
   };
   use tokio::sync::RwLock;
@@ -322,6 +319,20 @@ mod tests {
       self.assert_unlocked();
       self.inner.flush()
     }
+  }
+
+  fn row_containing(buffer: &Buffer, needle: &str) -> Option<u16> {
+    let width = usize::from(buffer.area.width);
+    if width == 0 {
+      return None;
+    }
+
+    buffer.content.chunks(width).enumerate().find_map(|(row, cells)| {
+      let text = cells.iter().map(Cell::symbol).collect::<String>();
+      text
+        .contains(needle)
+        .then(|| buffer.area.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX)))
+    })
   }
 
   #[test]
@@ -417,6 +428,81 @@ mod tests {
     let mut terminal = Terminal::new(backend).unwrap();
 
     draw(greeter, &mut terminal, true).await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn prompt_and_feedback_are_centered_as_one_visual_block() {
+    let mut greeter = Greeter::default();
+    greeter.settings.width = 20;
+    greeter.settings.container_padding = 0;
+    greeter.username.value = "alice".into();
+    greeter.username_cursor = greeter.username.value.len();
+    greeter.message = Some("PAM-FEEDBACK".into());
+    let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
+
+    draw(Arc::new(RwLock::new(greeter)), &mut terminal, false)
+      .await
+      .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let username = row_containing(buffer, "Username: alice").expect("username prompt was not rendered");
+    let message = row_containing(buffer, "PAM-FEEDBACK").expect("PAM feedback was not rendered");
+    let combined_top = username.saturating_sub(1);
+    let combined_bottom = message.saturating_add(1);
+    let main_top = 1;
+    let main_bottom = buffer.area.height.saturating_sub(1);
+
+    assert!(
+      combined_top
+        .saturating_sub(main_top)
+        .abs_diff(main_bottom.saturating_sub(combined_bottom))
+        <= 1,
+      "combined prompt and feedback were not vertically centered"
+    );
+  }
+
+  #[tokio::test]
+  async fn short_prompt_keeps_authentication_visible_and_shows_the_latest_feedback_line() {
+    let mut greeter = Greeter::default();
+    greeter.settings.width = 20;
+    greeter.settings.container_padding = 0;
+    greeter.settings.prompt_padding = 0;
+    greeter.mode = Mode::Password;
+    greeter.previous_mode = Mode::Password;
+    greeter.username.value = "alice".into();
+    greeter.prompt = Some("Password:".into());
+    greeter.asking_for_secret = true;
+    greeter.message = Some("OLD-LINE-ONE\nOLD-LINE-TWO\nLATEST-LINE".into());
+    let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+
+    draw(Arc::new(RwLock::new(greeter)), &mut terminal, true).await.unwrap();
+
+    let buffer = terminal.backend().buffer();
+    assert!(row_containing(buffer, "Username: alice").is_some());
+    assert!(row_containing(buffer, "Password:").is_some());
+    assert!(row_containing(buffer, "LATEST-LINE").is_some());
+    assert!(row_containing(buffer, "OLD-LINE-ONE").is_none());
+    assert!(row_containing(buffer, "OLD-LINE-TWO").is_none());
+  }
+
+  #[tokio::test]
+  async fn short_command_prompt_uses_the_same_latest_warning_layout() {
+    let mut greeter = Greeter::default();
+    greeter.settings.width = 20;
+    greeter.settings.container_padding = 0;
+    greeter.mode = Mode::Command;
+    greeter.command_buffer = "command".into();
+    greeter.command_cursor = greeter.command_buffer.len();
+    greeter.input_warning = Some("OLD-WARNING-ONE\nOLD-WARNING-TWO\nLATEST-WARNING".into());
+    let mut terminal = Terminal::new(TestBackend::new(24, 7)).unwrap();
+
+    draw(Arc::new(RwLock::new(greeter)), &mut terminal, true).await.unwrap();
+
+    let buffer = terminal.backend().buffer();
+    assert!(row_containing(buffer, "New command:").is_some());
+    assert!(row_containing(buffer, "LATEST-WARNING").is_some());
+    assert!(row_containing(buffer, "OLD-WARNING-ONE").is_none());
+    assert!(row_containing(buffer, "OLD-WARNING-TWO").is_none());
   }
 
   #[tokio::test]

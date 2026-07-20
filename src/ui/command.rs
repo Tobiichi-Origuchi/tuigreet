@@ -11,14 +11,17 @@ use crate::{
 
 pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
   let theme = &greeter.theme;
-
-  let container = get_rect(greeter, area, 0);
-
   let container_padding = greeter.container_padding();
+  let width = greeter.width().min(area.width);
+  let content_width = width.saturating_sub(container_padding.saturating_mul(2));
+  let container_height = get_height(greeter, content_width);
+  let (warning, warning_height) = get_message_height(greeter.input_warning.as_deref(), width);
+  let feedback = feedback_layout(area, width, container_height, container_height, warning_height);
+  let container = feedback.container;
   let frame = inset(container, container_padding);
 
   let block = Block::default()
-    .title(titleize(&text!(greeter, title_command)))
+    .title(titleize(&greeter.text.title_command))
     .title_style(theme.of(&[Themed::Title]))
     .style(theme.of(&[Themed::Container]))
     .borders(Borders::ALL)
@@ -37,31 +40,26 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
     .split(frame);
   let cursor = chunks[0];
 
-  let command_label_text = prompt_value(theme, Some(text!(greeter, new_command)));
+  let command_label_text = prompt_value(theme, Some(greeter.text.new_command.as_str()));
   let command_label = Paragraph::new(command_label_text).style(theme.of(&[Themed::Prompt]));
 
   f.render_widget(command_label, chunks[0]);
-  let label = text!(greeter, new_command);
-  let input_area = input_area(cursor, &label);
-  if input_area.width == 0 || input_area.height == 0 {
-    return None;
+  let input_area = input_area(cursor, &greeter.text.new_command);
+  let cursor = if input_area.width == 0 || input_area.height == 0 {
+    None
+  } else {
+    let view = input::view(&greeter.command_buffer, greeter.command_cursor, input_area.width);
+    let command_value = Paragraph::new(view.text).style(theme.of(&[Themed::Input]));
+    f.render_widget(command_value, input_area);
+    Some((input_area.x.saturating_add(view.cursor_column), input_area.y))
+  };
+
+  if let Some(warning) = warning {
+    let warning = warning
+      .alignment(Alignment::Center)
+      .scroll((feedback.message_scroll, 0));
+    f.render_widget(warning, feedback.message);
   }
 
-  let view = input::view(&greeter.command_buffer, greeter.command_cursor, input_area.width);
-  let command_value = Paragraph::new(view.text).style(theme.of(&[Themed::Input]));
-  f.render_widget(command_value, input_area);
-
-  if let Some(warning) = greeter.input_warning.as_deref() {
-    let (warning, warning_height) = get_message_height(Some(warning), container.width, container_padding, 0);
-    if let Some(warning) = warning {
-      let y = container.bottom();
-      let height = warning_height.min(area.bottom().saturating_sub(y));
-      f.render_widget(
-        warning.alignment(Alignment::Center),
-        Rect::new(container.x, y, container.width, height),
-      );
-    }
-  }
-
-  Some((input_area.x.saturating_add(view.cursor_column), input_area.y))
+  cursor
 }

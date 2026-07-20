@@ -909,6 +909,8 @@ impl Greeter {
       "maximum seconds to wait for a greetd response (default: 120)",
       "SECONDS",
     );
+    opts.optflag("q", "quiet", "discard output from the launched session");
+    opts.optflag("", "no-quiet", "keep launched session output, overriding configuration");
     opts.optflagopt(
       "d",
       "debug",

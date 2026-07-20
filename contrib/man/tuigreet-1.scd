@@ -29,6 +29,13 @@ tuigreet - A graphical console greeter for greetd
 	Set the maximum time to wait for a greetd response. The value must be between
 	1 and 3600 seconds; the default is 120.
 
+*-q, --quiet*
+	Redirect standard output and error from the launched session to */dev/null*.
+	This affects the authenticated session only, not tuigreet diagnostics.
+
+*--no-quiet*
+	Keep launched session output, overriding the configuration file.
+
 *-d, --debug [FILE]*
 	Enables debug logging to the provided FILE path, or to /tmp/tuigreet.log if no
 	file is specified. Logs are appended with mode 0600. FILE must be a regular

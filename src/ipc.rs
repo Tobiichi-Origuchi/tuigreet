@@ -850,6 +850,7 @@ fn wrap_session_command<'a>(
   default: &'a DefaultCommand<'a>,
 ) -> (Cow<'a, str>, Vec<String>) {
   let mut env: Vec<String> = vec![];
+  let mut command = Cow::Borrowed(default.command());
 
   match session {
     // If the target is a defined session, we should be able to deduce all the
@@ -876,10 +877,10 @@ fn wrap_session_command<'a>(
 
       if *session_type == SessionType::X11 {
         if let Some(ref wrap) = greeter.xsession_wrapper {
-          return (Cow::Owned(format!("{} {}", wrap, default.command())), env);
+          command = Cow::Owned(format!("{} {}", wrap, default.command()));
         }
       } else if let Some(ref wrap) = greeter.session_wrapper {
-        return (Cow::Owned(format!("{} {}", wrap, default.command())), env);
+        command = Cow::Owned(format!("{} {}", wrap, default.command()));
       }
     },
 
@@ -890,12 +891,16 @@ fn wrap_session_command<'a>(
         env.extend(base_env.iter().cloned());
       }
       if let Some(ref wrap) = greeter.session_wrapper {
-        return (Cow::Owned(format!("{} {}", wrap, default.command())), env);
+        command = Cow::Owned(format!("{} {}", wrap, default.command()));
       }
     },
   }
 
-  (Cow::Borrowed(default.command()), env)
+  if greeter.settings.quiet {
+    (Cow::Owned(format!("{command} >/dev/null 2>&1")), env)
+  } else {
+    (command, env)
+  }
 }
 
 #[cfg(test)]
@@ -1759,6 +1764,22 @@ mod test {
 
     assert_eq!(command.as_ref(), "/wrapper.sh --flag default-session --argument");
     assert_eq!(env, environment);
+  }
+
+  #[test]
+  fn quiet_launch_redirects_the_final_wrapped_command_only_when_enabled() {
+    let mut greeter = Greeter::default();
+    greeter.session_wrapper = Some("dbus-run-session".into());
+    let default = DefaultCommand("session --flag", Some(vec!["A=B".into()]));
+
+    let (command, environment) = wrap_session_command(&greeter, None, &default);
+    assert_eq!(command, "dbus-run-session session --flag");
+    assert_eq!(environment, ["A=B"]);
+
+    greeter.settings.quiet = true;
+    let (command, environment) = wrap_session_command(&greeter, None, &default);
+    assert_eq!(command, "dbus-run-session session --flag >/dev/null 2>&1");
+    assert_eq!(environment, ["A=B"]);
   }
 
   #[test]

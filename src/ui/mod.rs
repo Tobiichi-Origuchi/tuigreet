@@ -71,7 +71,8 @@ where
     let padded = inset(size, greeter.window_padding());
     let time_top = greeter.time && greeter.settings.time_position == WidgetPosition::Top;
     let time_bottom = greeter.time && greeter.settings.time_position == WidgetPosition::Bottom;
-    let info_top = time_top || greeter.settings.battery;
+    let battery_visible = greeter.settings.battery && greeter.battery_info.is_some();
+    let info_top = time_top || battery_visible;
     let status_top = greeter.settings.status_position == WidgetPosition::Top;
     let status_bottom = greeter.settings.status_position == WidgetPosition::Bottom;
     let mut constraints = Vec::with_capacity(5);
@@ -145,7 +146,7 @@ fn render_info_row(greeter: &Greeter, frame: &mut Frame<'_>, area: Rect, show_ti
     );
   }
 
-  let Some(battery) = greeter.battery_info else {
+  let Some(battery) = greeter.settings.battery.then_some(greeter.battery_info).flatten() else {
     return;
   };
   let battery = if battery.charging {
@@ -807,6 +808,36 @@ mod tests {
     let buffer = terminal.backend().buffer();
     assert!(row_containing(buffer, "CLOCK").is_none());
     assert!(row_containing(buffer, "Reset").is_none());
+  }
+
+  #[tokio::test]
+  async fn unavailable_or_disabled_battery_does_not_reserve_or_render_a_row() {
+    let mut greeter = Greeter::default();
+    greeter.settings.status_position = WidgetPosition::Hidden;
+    let greeter = Arc::new(RwLock::new(greeter));
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+
+    draw(greeter.clone(), &mut terminal, false).await.unwrap();
+    let baseline = row_containing(terminal.backend().buffer(), "Username:").unwrap();
+
+    greeter.write().await.settings.battery = true;
+    draw(greeter.clone(), &mut terminal, false).await.unwrap();
+    assert_eq!(row_containing(terminal.backend().buffer(), "Username:"), Some(baseline));
+
+    greeter.write().await.battery_info = Some(BatteryInfo {
+      percentage: 73,
+      charging: false,
+    });
+    draw(greeter.clone(), &mut terminal, false).await.unwrap();
+    let available = terminal.backend().buffer();
+    assert_eq!(row_containing(available, "73%"), Some(0));
+    assert_ne!(row_containing(available, "Username:"), Some(baseline));
+
+    greeter.write().await.settings.battery = false;
+    draw(greeter, &mut terminal, false).await.unwrap();
+    let disabled = terminal.backend().buffer();
+    assert_eq!(row_containing(disabled, "Username:"), Some(baseline));
+    assert!(row_containing(disabled, "73%").is_none());
   }
 
   #[tokio::test]

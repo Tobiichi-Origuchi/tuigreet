@@ -572,6 +572,27 @@ fn information_actions_need_neither_tty_nor_greetd_socket() {
 }
 
 #[test]
+fn successful_help_is_written_only_to_stdout() {
+  let output = run_information_action(&["--help"]);
+
+  assert!(
+    output.status.success(),
+    "help failed: {}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+  assert!(
+    String::from_utf8_lossy(&output.stdout).contains("Usage: tuigreet"),
+    "help was not written to stdout: {}",
+    String::from_utf8_lossy(&output.stdout)
+  );
+  assert!(
+    output.stderr.is_empty(),
+    "successful help unexpectedly wrote to stderr: {}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+}
+
+#[test]
 fn real_startup_requires_a_connectable_greetd_socket_before_terminal_setup() {
   let temp = TempDir::new().expect("failed to create process-test directory");
   let config = temp.path().join("config.toml");

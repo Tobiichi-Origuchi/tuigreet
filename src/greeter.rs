@@ -1599,7 +1599,7 @@ fn clamp_menu<T: MenuItem>(menu: &mut Menu<T>) {
 }
 
 fn print_usage(opts: CliOptions) {
-  eprint!("{}", opts.usage("Usage: tuigreet [OPTIONS]"));
+  print!("{}", opts.usage("Usage: tuigreet [OPTIONS]"));
 }
 
 fn parse_options_ignoring_invalid<S>(opts: &CliOptions, args: &[S]) -> (Matches, Vec<String>)

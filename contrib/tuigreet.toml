@@ -78,6 +78,9 @@
 # user-session = false
 
 [users]
+# Administrator-selected username used when no remembered user is available
+# (example). This does not enable remembering or expose the user list.
+# default = "alice"
 # Show an F-key menu containing eligible local users.
 # menu = false
 # Complete eligible usernames with Tab.

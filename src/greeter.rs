@@ -649,6 +649,8 @@ impl Greeter {
 
     greeter.initialize_cache().await;
 
+    greeter.prefill_default_user();
+
     if greeter.remember
       && let Some(user) = greeter.cache_state.last_user().cloned()
     {
@@ -981,6 +983,8 @@ impl Greeter {
       "no-remember-user-session",
       "do not remember the last selected session for each user",
     );
+    opts.optopt("u", "user", "pre-fill an administrator-selected username", "USER");
+    opts.optflag("", "no-user", "clear a configured default username");
     opts.optflag("", "user-menu", "allow graphical selection of users from a menu");
     opts.optflag("", "no-user-menu", "disable graphical user selection");
     opts.optflag("", "user-autocomplete", "allow Tab completion of usernames");
@@ -1215,6 +1219,13 @@ impl Greeter {
     self.remember = settings.remember;
     self.remember_session = settings.remember_session;
     self.remember_user_session = settings.remember_user_session;
+    if settings.default_user != old_settings.default_user
+      && self.username.value.is_empty()
+      && self.mode == Mode::Username
+      && self.auth_state == AuthState::Idle
+    {
+      self.prefill_user(settings.default_user.as_deref());
+    }
     self.allow_command_editor = settings.allow_command_editor;
     if command_editor_disabled {
       // A deferred cache has an intentionally empty in-memory state. Disk
@@ -1398,6 +1409,25 @@ impl Greeter {
       self.username = MaskedString::from(user.username.clone(), user.name.clone());
       self.username_cursor = self.username.value.len();
     }
+  }
+
+  fn prefill_default_user(&mut self) {
+    let username = self.settings.default_user.clone();
+    self.prefill_user(username.as_deref());
+  }
+
+  fn prefill_user(&mut self, username: Option<&str>) {
+    let Some(username) = username.filter(|username| !username.is_empty()) else {
+      return;
+    };
+    let display_name = self
+      .users
+      .options
+      .iter()
+      .find(|user| user.username == username)
+      .and_then(|user| user.name.clone());
+    self.username = MaskedString::from(username.to_string(), display_name);
+    self.username_cursor = self.username.value.len();
   }
 
   pub fn remove_prompt(&mut self) {
@@ -1820,7 +1850,7 @@ mod test {
     power::{CommandLine, PowerCommand, PowerOption, default_command},
     text::Text,
     ui::{
-      common::{menu::Menu, style::Themed},
+      common::{masked::MaskedString, menu::Menu, style::Themed},
       sessions::{Session, SessionSource, SessionType},
       users::User,
     },
@@ -2539,6 +2569,53 @@ mod test {
     assert_eq!(greeter.sessions.options.len(), 3);
     assert_eq!(greeter.sessions.options[0].slug.as_deref(), Some("mock-wayland"));
     assert!(matches!(greeter.session_source, SessionSource::Session(0)));
+  }
+
+  #[tokio::test]
+  async fn configured_default_user_is_prefilled_without_enabling_enumeration() {
+    let directory = tempdir().unwrap();
+    let sessions = directory.path().join("wayland");
+    let xsessions = directory.path().join("x11");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::create_dir_all(&xsessions).unwrap();
+    let invocation = CliInvocation::parse([
+      "tuigreet",
+      "--mock",
+      "--sessions",
+      sessions.to_str().unwrap(),
+      "--xsessions",
+      xsessions.to_str().unwrap(),
+      "--user",
+      "alice",
+    ]);
+
+    let greeter = Greeter::new_isolated(invocation.matches()).await;
+
+    assert_eq!(greeter.username.value, "alice");
+    assert_eq!(greeter.username_cursor, "alice".len());
+    assert!(!greeter.user_menu);
+    assert!(!greeter.user_autocomplete);
+    assert!(greeter.users.options.is_empty());
+  }
+
+  #[test]
+  fn default_user_reload_only_prefills_an_untouched_username_prompt() {
+    let mut greeter = Greeter::default();
+    let mut settings = greeter.settings.clone();
+    settings.default_user = Some("alice".into());
+    greeter.apply_reload(reload_plan(settings));
+    assert_eq!(greeter.username.value, "alice");
+
+    let mut settings = greeter.settings.clone();
+    settings.default_user = Some("bob".into());
+    greeter.apply_reload(reload_plan(settings));
+    assert_eq!(greeter.username.value, "alice");
+
+    greeter.username = MaskedString::default();
+    let mut settings = greeter.settings.clone();
+    settings.default_user = Some("carol".into());
+    greeter.apply_reload(reload_plan(settings));
+    assert_eq!(greeter.username.value, "carol");
   }
 
   #[test]

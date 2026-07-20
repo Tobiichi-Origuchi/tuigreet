@@ -60,7 +60,7 @@ const DISPLAY_FIELDS: &[&str] = &[
   "theme",
 ];
 const REMEMBER_FIELDS: &[&str] = &["username", "session", "user-session"];
-const USER_FIELDS: &[&str] = &["menu", "autocomplete", "min-uid", "max-uid"];
+const USER_FIELDS: &[&str] = &["default", "menu", "autocomplete", "min-uid", "max-uid"];
 const SECRET_FIELDS: &[&str] = &["asterisks", "characters"];
 const LAYOUT_FIELDS: &[&str] = &["window-padding", "container-padding", "prompt-padding", "greet-align"];
 const POWER_FIELDS: &[&str] = &["shutdown", "reboot", "suspend", "hibernate", "setsid"];
@@ -296,6 +296,7 @@ pub struct Settings {
   pub remember: bool,
   pub remember_session: bool,
   pub remember_user_session: bool,
+  pub default_user: Option<String>,
   pub user_menu: bool,
   pub user_autocomplete: bool,
   pub min_uid: Option<u32>,
@@ -342,6 +343,7 @@ impl Default for Settings {
       remember: false,
       remember_session: false,
       remember_user_session: false,
+      default_user: None,
       user_menu: false,
       user_autocomplete: false,
       min_uid: None,
@@ -399,6 +401,7 @@ struct Layer {
   remember: Option<bool>,
   remember_session: Option<bool>,
   remember_user_session: Option<bool>,
+  default_user: Option<Option<String>>,
   user_menu: Option<bool>,
   user_autocomplete: Option<bool>,
   min_uid: Option<Option<u32>>,
@@ -800,6 +803,7 @@ fn apply_layer(settings: &mut Settings, layer: Layer, context: LayerContext<'_>,
     time_format,
     refresh_rate,
     remember,
+    default_user,
     user_menu,
     user_autocomplete,
     asterisks,
@@ -944,6 +948,7 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
   layer.remember = cli_bool(matches, "remember", "no-remember", warnings);
   layer.remember_session = cli_bool(matches, "remember-session", "no-remember-session", warnings);
   layer.remember_user_session = cli_bool(matches, "remember-user-session", "no-remember-user-session", warnings);
+  layer.default_user = cli_default_user(matches, warnings);
   layer.user_menu = cli_bool(matches, "user-menu", "no-user-menu", warnings);
   layer.user_autocomplete = cli_bool(matches, "user-autocomplete", "no-user-autocomplete", warnings);
   layer.min_uid = cli_number::<u32>(matches, "user-menu-min-uid", 0, u32::MAX, warnings).map(Some);
@@ -985,6 +990,31 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
   layer.kb_sessions = cli_number(matches, "kb-sessions", 1, 12, warnings);
   layer.kb_power = cli_number(matches, "kb-power", 1, 12, warnings);
   layer
+}
+
+fn cli_default_user(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Option<Option<String>> {
+  let user = matches.opt_str("user");
+  let clear = matches.opt_present("no-user");
+  if user.is_some() && clear {
+    warnings.push(Diagnostic::command_line(
+      Some("--user/--no-user"),
+      "the options conflict; --no-user takes precedence",
+    ));
+  }
+  if clear {
+    return Some(None);
+  }
+  user.and_then(|user| {
+    if user.trim().is_empty() {
+      warnings.push(Diagnostic::command_line(
+        Some("--user"),
+        "the username must not be empty; ignoring it",
+      ));
+      None
+    } else {
+      Some(Some(user))
+    }
+  })
 }
 
 fn cli_container_title(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Option<ContainerTitle> {
@@ -1154,6 +1184,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
   if let Some(table) = read_table(document.as_table(), "users", path, source, warnings) {
     layer.spans.uid_range = combined_item_span(table, &["min-uid", "max-uid"]);
     warn_unknown(table, USER_FIELDS, path, source, warnings, "users");
+    layer.default_user = read_optional_string(table, "default", path, source, warnings, "users");
     layer.user_menu = read_bool(table, "menu", path, source, warnings, "users");
     layer.user_autocomplete = read_bool(table, "autocomplete", path, source, warnings, "users");
     layer.min_uid = read_u32(table, "min-uid", path, source, warnings, "users").map(Some);
@@ -2055,6 +2086,32 @@ mod tests {
   }
 
   #[test]
+  fn default_username_layers_and_can_be_cleared_explicitly() {
+    let directory = tempdir().unwrap();
+    let system = directory.path().join("system.toml");
+    let explicit = directory.path().join("explicit.toml");
+    write(&system, "[users]\ndefault = 'alice'\n");
+    write(&explicit, "[users]\ndefault = ''\n");
+
+    let (cleared, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(cleared.default_user.is_none());
+
+    let (replaced, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&["--user", "bob"]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(replaced.default_user.as_deref(), Some("bob"));
+
+    let (cleared, warnings) = load_paths(Some(&system), None, &matches(&["--no-user"]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(cleared.default_user.is_none());
+
+    let (conflict, warnings) = load_paths(Some(&system), None, &matches(&["--user", "bob", "--no-user"]));
+    assert!(conflict.default_user.is_none());
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("--no-user takes precedence"));
+  }
+
+  #[test]
   fn the_same_configuration_file_is_applied_only_once() {
     let dir = tempdir().unwrap();
     let config = dir.path().join("config.toml");
@@ -2627,6 +2684,7 @@ mod tests {
       remember: false,
       remember_session: false,
       remember_user_session: false,
+      default_user: Some("alice".into()),
       user_menu: false,
       user_autocomplete: false,
       min_uid: Some(1000),

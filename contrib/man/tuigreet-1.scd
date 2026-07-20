@@ -161,6 +161,13 @@ tuigreet - A graphical console greeter for greetd
 *--no-remember-user-session*
 	Do not remember per-user session selections, overriding the configuration file.
 
+*-u, --user USER*
+	Pre-fill an administrator-selected username. A successfully remembered user,
+	when enabled and available, takes priority over this static fallback.
+
+*--no-user*
+	Clear a configured default username.
+
 	Remembered values are stored atomically in a versioned state file under
 	*/var/cache/tuigreet*. The directory must be owned by the greeter user and
 	must not be group- or world-writable. Mock sessions never update this cache.

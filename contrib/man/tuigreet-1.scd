@@ -51,15 +51,15 @@ tuigreet - A graphical console greeter for greetd
 	Disable the command editor, overriding a configuration file that enabled it.
 
 *--env KEY=VALUE*
-	Environment variables to run the default session with (can appear more then once).
+	Environment variables to run the configured default command with (can appear
+	more than once). Desktop sessions receive their inferred XDG environment.
 
 *-s, --sessions DIR1[:DIR2]...*
 	Location of desktop-files to be used as Wayland session definitions. By
 	default, Wayland sessions are fetched from */usr/share/wayland-sessions*.
 
 *--session-wrapper 'CMD [ARGS]...'*
-	Specify a wrapper command to execute instead of the session for non-X11
-	sessions. This command will receive the session command as its arguments.
+	Prepend a wrapper command to non-X11 session commands.
 
 *-x, --xsessions DIR1[:DIR2]...*
 	Location of desktop-files to be used as X11 session definitions. By
@@ -106,10 +106,10 @@ tuigreet - A graphical console greeter for greetd
 	character, unique matches are completed and ambiguous matches expand only
 	their common prefix. Disabled by default.
 
-*--user-menu-min-uid*
+*--user-menu-min-uid UID*
 	Minimum UID exposed by the user menu or username completion.
 
-*--user-menu-max-uid*
+*--user-menu-max-uid UID*
 	Maximum UID exposed by the user menu or username completion.
 
 *-r, --remember*
@@ -139,8 +139,8 @@ tuigreet - A graphical console greeter for greetd
 	keystroke. By default, no feedback is given at all.
 
 *--asterisks-char CHARS*
-	Change the default feedback character from an asterisk to a random
-	distribution of the provided characters.
+	Cycle through the configured non-empty character sequence when masking a
+	secret instead of using the default asterisk.
 
 *--window-padding COLS*
 	Add spacing between the edge of the screen area the drawing area.
@@ -155,19 +155,19 @@ tuigreet - A graphical console greeter for greetd
 	Alignment of the greeting text in the main prompt container
 	(default: 'center').
 
-*--power-shutdown CMD [ARGS]...*
+*--power-shutdown 'CMD [ARGS]...'*
 	Customize the command run when instructed to shut down the machine. This must
 	be a non-interactive command (sudo cannot prompt for a password, for example).
 
-*--power-reboot CMD [ARGS]...*
+*--power-reboot 'CMD [ARGS]...'*
 	Customize the command run when instructed to reboot the machine. This must be
 	a non-interactive command (sudo cannot prompt for a password, for example).
 
-*--power-suspend CMD [ARGS]...*
+*--power-suspend 'CMD [ARGS]...'*
 	Customize the command run when instructed to suspend the machine. By default,
 	this uses *systemctl* with systemd and *loginctl* with elogind.
 
-*--power-hibernate CMD [ARGS]...*
+*--power-hibernate 'CMD [ARGS]...'*
 	Customize the command run when instructed to hibernate the machine. By default,
 	this uses *systemctl* with systemd and *loginctl* with elogind.
 
@@ -189,9 +189,15 @@ tuigreet - A graphical console greeter for greetd
 	Run without connecting to greetd and simulate authentication locally for
 	visual inspection. Power actions exit without changing system power state.
 
-*--kb-[command|sessions|power] [1-12]*
-	change the default F-key keybindings to access the command, sessions and power
-	menus. The command binding is inactive unless *--allow-command-editor* is set.
+*--kb-command [1-12]*
+	Change the F-key used for the command editor. The binding is inactive unless
+	*--allow-command-editor* is set.
+
+*--kb-sessions [1-12]*
+	Change the F-key used for the sessions menu.
+
+*--kb-power [1-12]*
+	Change the F-key used for the power menu.
 
 # CONFIGURATION
 

@@ -217,36 +217,30 @@ Please refer to [greetd's wiki](https://man.sr.ht/~kennylevinsen/greetd/) for mo
 
 ### Sessions
 
-The available sessions are fetched from `desktop` files in `/usr/share/xsessions` and `/usr/share/wayland-sessions`. If you want to provide custom directories, you can set the `--sessions` arguments with a colon-separated list of directories for `tuigreet` to fetch session definitions some other place.
+Sessions are loaded from `.desktop` files below the XDG data directories (`wayland-sessions` and `xsessions`); the usual defaults include `/usr/local/share` and `/usr/share`. Use `--sessions` or `--xsessions` with colon-separated directories to replace the defaults for only that session type.
 
 #### Desktop environments
 
-`greetd` only accepts environment-less commands to be used to start a session. Therefore, if your desktop environment requires either arguments or environment variables, you will need to create a wrapper script and refer to it in an appropriate desktop file.
+Tuigreet accepts regular Desktop Entries with `[Desktop Entry]`, `Type=Application`, `Name`, and `Exec`. It also honors `Hidden`, `NoDisplay`, `TryExec`, `DesktopNames`, and standard `Exec` quoting/field-code rules. Invalid or shadowed entries are ignored deterministically.
 
-For example, to run X11 Gnome, you may need to start it through `startx` and configure your `~/.xinitrc` (or an external `xinitrc` with a wrapper script):
+For example, a custom Wayland session can be placed in a directory configured through `--sessions`:
 
-```
-exec gnome-session
-```
-
-To run Wayland Gnome, you would need to create a wrapper script akin to the following:
-
-```
-XDG_SESSION_TYPE=wayland dbus-run-session gnome-session
-```
-
-Then refer to your wrapper script in a custom desktop file (in a directory declared with the `-s/--sessions` option):
-
-```
+```ini
+[Desktop Entry]
+Type=Application
 Name=Wayland Gnome
-Exec=/path/to/my/wrapper.sh
+TryExec=/usr/bin/dbus-run-session
+Exec=/usr/bin/env "XDG_SESSION_TYPE=wayland" dbus-run-session gnome-session
+DesktopNames=GNOME
 ```
+
+greetd supports both a command and environment entries in `StartSession`. `--env KEY=VALUE` supplies environment only for the configured default command; selected desktop sessions instead receive `XDG_SESSION_TYPE` and, when available, `XDG_CURRENT_DESKTOP` inferred from their entry. Additional environment can be expressed explicitly in `Exec` as above or supplied by a trusted wrapper.
 
 #### Common wrappers
 
-Two options allows you to automatically wrap run commands around sessions started from desktop files, depending on whether they come `/usr/share/wayland-sessions` or `/usr/share/xsessions`: `--sessions-wrapper` and `--xsessions-wrapper`. With this, you can prepend another command on front of the sessions you run to set up the required environment to run these kinds of sessions.
+`--session-wrapper 'CMD [ARGS]...'` prepends a command to non-X11 sessions, while `--xsession-wrapper 'CMD [ARGS]...'` does the same for X11 sessions. For example, `--session-wrapper dbus-run-session` starts the selected session under `dbus-run-session`.
 
-By default, unless you change it, all X11 sessions (those picked up from `/usr/share/xsessions`) are prepended with `startx /usr/bin/env`, so the X11 server is started properly.
+X11 sessions use `startx /usr/bin/env` by default. Set `xsession-wrapper = false` in TOML or pass `--no-xsession-wrapper` to disable it.
 
 ### Power management
 

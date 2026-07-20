@@ -933,6 +933,7 @@ mod test {
   use crate::{
     Greeter,
     Mode,
+    ReloadPlan,
     cache::{CacheStore, CacheUpdate, RememberedSelection, RememberedUser},
     event::{Control, Events, fill_event_queue},
     ipc::{DefaultCommand, desktop_names_to_xdg},
@@ -1217,6 +1218,28 @@ mod test {
     assert!(matches!(
       ipc.next().await.unwrap().as_ref(),
       Request::StartSession { cmd, .. } if cmd.as_slice() == ["session"]
+    ));
+  }
+
+  #[tokio::test]
+  async fn successful_authentication_uses_the_latest_reload_policy() {
+    let mut greeter = Greeter::default();
+    greeter.settings.command = Some("old-session".into());
+    greeter.session_source = SessionSource::DefaultCommand("old-session".into(), None);
+    greeter.auth_state = AuthState::ContinuingAuth;
+    let mut settings = greeter.settings.clone();
+    settings.command = Some("new-session".into());
+    settings.environment = vec!["RELOADED=yes".into()];
+    greeter.apply_reload(ReloadPlan::prepare(greeter.reload_snapshot(), settings));
+    let ipc = Ipc::new();
+
+    ipc.parse_response(&mut greeter, Response::Success).await.unwrap();
+
+    assert!(matches!(greeter.auth_state, AuthState::StartingSession(..)));
+    assert!(matches!(
+      ipc.next().await.unwrap().as_ref(),
+      Request::StartSession { cmd, env }
+        if cmd.as_slice() == ["new-session"] && env.as_slice() == ["RELOADED=yes"]
     ));
   }
 

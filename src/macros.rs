@@ -1,4 +1,4 @@
-use greetd_ipc::Request;
+use greetd_ipc::{Request, Response};
 
 pub trait SafeDebug {
   fn safe_repr(&self) -> String;
@@ -30,6 +30,18 @@ impl SafeDebug for Request {
   }
 }
 
+impl SafeDebug for Response {
+  fn safe_repr(&self) -> String {
+    match self {
+      Self::Success => "Success".to_string(),
+      Self::Error { error_type, .. } => format!("Error {{ error_type: {error_type:?} }}"),
+      Self::AuthMessage { auth_message_type, .. } => {
+        format!("AuthMessage {{ auth_message_type: {auth_message_type:?} }}")
+      },
+    }
+  }
+}
+
 fn valid_environment_key(key: &str) -> bool {
   let mut chars = key.chars();
 
@@ -43,7 +55,7 @@ macro_rules! text {
 
 #[cfg(test)]
 mod tests {
-  use greetd_ipc::Request;
+  use greetd_ipc::{AuthMessageType, ErrorType, Request, Response};
 
   use super::SafeDebug;
 
@@ -67,5 +79,25 @@ mod tests {
     for secret in ["/bin/sh", "hunter2", ":1", "top-secret", "malformed-secret"] {
       assert!(!output.contains(secret));
     }
+  }
+
+  #[test]
+  fn response_debug_output_redacts_pam_messages_and_error_descriptions() {
+    let auth_message = Response::AuthMessage {
+      auth_message_type: AuthMessageType::Visible,
+      auth_message: "account-specific prompt".into(),
+    };
+    let error = Response::Error {
+      error_type: ErrorType::AuthError,
+      description: "account-specific failure".into(),
+    };
+
+    let auth_output = auth_message.safe_repr();
+    let error_output = error.safe_repr();
+
+    assert_eq!(auth_output, "AuthMessage { auth_message_type: Visible }");
+    assert_eq!(error_output, "Error { error_type: AuthError }");
+    assert!(!auth_output.contains("account-specific prompt"));
+    assert!(!error_output.contains("account-specific failure"));
   }
 }

@@ -574,11 +574,8 @@ impl Ipc {
   {
     let mut control = None;
 
-    // Do not display actual message from greetd, which may contain entered information, sometimes passwords.
-    match response {
-      Response::Error { ref error_type, .. } => tracing::info!("received greetd error message: {error_type:?}"),
-      ref response => tracing::info!("received greetd message: {:?}", response),
-    }
+    // PAM messages and error descriptions can contain account-specific or secret data.
+    tracing::info!("received greetd message: {}", response.safe_repr());
 
     match response {
       Response::AuthMessage {

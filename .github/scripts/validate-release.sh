@@ -49,8 +49,9 @@ done
 
 git_pkgbuild=packaging/aur/greetd-tuigreety-git/PKGBUILD
 git_package_version=$(sed -n 's/^pkgver=//p' "$git_pkgbuild")
-if [[ $git_package_version != "$version".r* ]]; then
-  echo "$git_pkgbuild has pkgver=$git_package_version, expected a $version.r* prefix" >&2
+if [[ ! $git_package_version =~ ^[0-9]+\.[0-9]+\.[0-9]+\.r[0-9]+\.g[0-9a-f]{7,}$ ||
+      $git_package_version =~ \.g0+$ ]]; then
+  echo "$git_pkgbuild has non-concrete pkgver=$git_package_version" >&2
   exit 1
 fi
 

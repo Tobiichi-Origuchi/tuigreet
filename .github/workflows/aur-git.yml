@@ -68,7 +68,21 @@ jobs:
           cp packaging/aur/tuigreet.conf "$directory/tuigreet.conf"
           chown -R builder:builder "$directory"
           as_builder sh -c "cd '$directory' && updpkgsums"
+          # --printsrcinfo only reads the declared pkgver. Fetch the VCS source
+          # first so makepkg runs pkgver() and writes the resolved version back.
+          as_builder sh -c "cd '$directory' && makepkg --nobuild --noprepare --nodeps --noconfirm"
           as_builder sh -c "cd '$directory' && makepkg --printsrcinfo > .SRCINFO"
+          pkgver=$(sed -n 's/^pkgver=//p' "$directory/PKGBUILD")
+          srcinfo_pkgver=$(sed -n 's/^[[:space:]]*pkgver = //p' "$directory/.SRCINFO")
+          if [[ ! $pkgver =~ ^[0-9]+\.[0-9]+\.[0-9]+\.r[0-9]+\.g[0-9a-f]{7,}$ ||
+                $pkgver =~ \.g0+$ ]]; then
+            echo "invalid resolved VCS version: $pkgver" >&2
+            exit 1
+          fi
+          if [[ $srcinfo_pkgver != "$pkgver" ]]; then
+            echo ".SRCINFO version $srcinfo_pkgver does not match PKGBUILD version $pkgver" >&2
+            exit 1
+          fi
       - name: Stop metadata processes
         if: always()
         run: pkill -KILL -u builder || true

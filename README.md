@@ -184,7 +184,7 @@ The original project remains available from Arch Linux's official repositories a
 
 All three install `/usr/bin/tuigreet` and `/etc/tuigreet/config.toml`, provide `greetd-greeter`, and conflict with `greetd-tuigreet` and each other. Package upgrades preserve administrator changes to the configuration file.
 
-The `-git` package intentionally keeps stable AUR metadata while `pkgver()` resolves the current upstream commit at build time. Enable development-package checks in your AUR helper so upstream-only commits are discovered during upgrades. For example, paru users can set `Devel` in `paru.conf` or run `paru --devel -Syu`; `paru --gendb` initializes tracking when migrating an existing VCS package from another helper.
+The `-git` package records the real source revision from the last packaging update, while `pkgver()` resolves the current `master` revision at build time. Its AUR metadata is not bumped for source-only commits, as required by the Arch VCS package guidelines. Enable development-package checks in your AUR helper so those commits are discovered without false version upgrades. For example, paru users can set `Devel` in `paru.conf` or run `paru --devel -Syu`; `paru --gendb` initializes tracking when migrating an existing VCS package from another helper.
 
 ### Pre-built binaries
 
